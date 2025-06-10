@@ -1,7 +1,7 @@
 -------------------------------------------------------------------------------
 -- File: livox.lua
 -- Description: Wireshark Lua Plugin for Livox Mid-360 Pushmsg Diagnostic
--- Author: 融汇定位（北京） Zhao Yunfei
+-- Author: FelixCooper1026
 -- Date: 2025-05-22
 -- Version: 1.2
 -------------------------------------------------------------------------------
