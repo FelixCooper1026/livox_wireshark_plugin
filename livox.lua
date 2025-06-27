@@ -2,18 +2,20 @@
 -- File: livox.lua
 -- Description: Wireshark Lua Plugin for Livox Mid-360 Pushmsg Diagnostic
 -- Author: FelixCooper1026
--- Date: 2025-05-22
--- Version: 1.2
+-- Date: 2025-06-26
+-- Version: 1.2.1
 -------------------------------------------------------------------------------
 -- History:
 -- 2025-05-26: 增加对应字段高亮显示功能
 -- beta modify：将core_temp改为float
 -- 2025-06-03：修复端口号解析错误，应为小端序
 -- 2025-06-09：修复time_offset数据类型解析错误，应为 int64_t
+-- 2025-06-23：增加 HAP 雷达解析支持
+-- 2025-06-26：增加对点云及IMU数据的解析
 -------------------------------------------------------------------------------
 
 
-local livox_proto = Proto("Livox", "Livox Pushmsg Diag")
+local livox_pushmsg_proto = Proto("LivoxPushmsg", "Livox Pushmsg Diag")
 
 local f_pcl_type = ProtoField.string("livox.pcl_type", "点云坐标格式", base.UNICODE)
 local f_pattern_mode = ProtoField.string("livox.pattern_mode", "扫描模式", base.UNICODE)
@@ -45,14 +47,26 @@ local f_error_code = ProtoField.string("livox.error_code", "异常码", base.UNI
 local f_loader_version = ProtoField.string("livox.loader_version", "Loader版本", base.UNICODE)
 local f_hw_version = ProtoField.string("livox.hw_version", "硬件版本", base.UNICODE)
 local f_work_status = ProtoField.string("livox.work_status", "当前工作状态", base.UNICODE)
+local f_point_send_en = ProtoField.string("livox.point_send_en", "点云发送控制", base.UNICODE)
+local f_blind_spot_set = ProtoField.string("livox.blind_spot_set", "盲区范围设置", base.UNICODE)
+local f_glass_heat_support = ProtoField.string("livox.glass_heat_support", "窗口加热支持", base.UNICODE)
+local f_fusa_en = ProtoField.string("livox.fusa_en", "FUSA诊断功能", base.UNICODE)
+local f_force_heat_en = ProtoField.string("livox.force_heat_en", "强制加热", base.UNICODE)
+local f_workmode_after_boot = ProtoField.string("livox.workmode_after_boot", "开机初始化工作模式", base.UNICODE)
+local f_status_code = ProtoField.string("livox.status_code", "状态码", base.UNICODE)
+local f_lidar_flash_status = ProtoField.string("livox.lidar_flash_status", "Flash状态", base.UNICODE)
+local f_cur_glass_heat_state = ProtoField.string("livox.cur_glass_heat_state", "当前窗口加热状态", base.UNICODE)
 
-livox_proto.fields = {
+livox_pushmsg_proto.fields = {
     f_pcl_type, f_pattern_mode, f_lidar_ip, f_target_push, f_target_pcl, f_target_imu, f_install_attitude,
     f_fov_cfg0, f_fov_cfg1, f_fov_en, f_detect_mode, f_func_io_cfg,
     f_work_tgt_mode, f_imu_data_en, f_sn, f_product_info, f_version_app, f_mac,
     f_hms_codes, f_core_temp, f_powerup_count, f_local_time, f_last_sync_time,
     f_time_offset, f_time_sync_type, f_fw_type, f_error_code,
-    f_loader_version, f_hw_version, f_work_status
+    f_loader_version, f_hw_version, f_work_status,
+    f_point_send_en, f_blind_spot_set, f_glass_heat_support, f_fusa_en,
+    f_force_heat_en, f_workmode_after_boot, f_status_code, f_lidar_flash_status,
+    f_cur_glass_heat_state
 }
 
 local fault_id_dict = {
@@ -99,9 +113,11 @@ local fault_level_dict = {
     ["0400"] = "Fatal严重错误"
 }
 
-function livox_proto.dissector(buffer, pinfo, tree)
-    pinfo.cols.protocol = "Livox"
-    local subtree = tree:add(livox_proto, buffer(), "Livox Pushmsg Diag")
+function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
+    pinfo.cols.protocol = "LivoxPushmsg"
+    local subtree = tree:add(livox_pushmsg_proto, buffer(), "Livox Pushmsg Diag")
+
+    print("Header:", tostring(buffer(0,28)))
 
     local index = 28
     while index < buffer:len() do
@@ -394,14 +410,303 @@ function livox_proto.dissector(buffer, pinfo, tree)
                 subtree:add(f_hms_codes, data_bytes(0, math.min(32, data_bytes:len())), "无故障") 
             end
 
+        elseif key == 0x0003 then
+            -- 点云发送控制
+            local val_map = {
+                [0x00] = "进入工作模式发送点云",
+                [0x01] = "进入工作模式不发送点云"
+            }
+            local val = val_map[data_bytes(0,1):uint()] or string.format("未知(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_point_send_en, data_bytes(0,1), val)
+
+        elseif key == 0x0013 then
+            -- 盲区范围设置
+            local blind_spot = data_bytes(0,4):le_uint()
+            local val = string.format("%d cm (范围50~200cm)", blind_spot)
+            subtree:add(f_blind_spot_set, data_bytes(0,4), val)
+
+        elseif key == 0x001B then
+            -- 窗口加热支持
+            local val_map = {
+                [0x00] = "禁止窗口加热功能",
+                [0x01] = "允许窗口加热功能"
+            }
+            local val = val_map[data_bytes(0,1):uint()] or string.format("未知(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_glass_heat_support, data_bytes(0,1), val)
+
+        elseif key == 0x001D then
+            -- fusa诊断功能
+            local val_map = {
+                [0x00] = "关闭fusa诊断功能",
+                [0x01] = "开启fusa诊断功能"
+            }
+            local val = val_map[data_bytes(0,1):uint()] or string.format("未知(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_fusa_en, data_bytes(0,1), val)
+
+        elseif key == 0x001E then
+            -- 强制加热
+            local val_map = {
+                [0x00] = "关闭强制加热",
+                [0x01] = "开启强制加热"
+            }
+            local val = val_map[data_bytes(0,1):uint()] or string.format("未知(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_force_heat_en, data_bytes(0,1), val)
+
+        elseif key == 0x0020 then
+            -- 开机初始化工作模式
+            local val_map = {
+                [0x00] = "待机状态(默认值)",
+                [0x01] = "采样状态",
+                [0x02] = "待机状态"
+            }
+            local val = val_map[data_bytes(0,1):uint()] or string.format("未知(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_workmode_after_boot, data_bytes(0,1), val)
+
+        elseif key == 0x800D then
+            -- 状态码，仅显示前8字节（byte0~byte7），每2bit详细解析
+            local status_tree = subtree:add(f_status_code, data_bytes(0,8), "状态码（byte0~byte7，每2bit为一个故障）")
+
+            local fault_labels = {
+                [0] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [1] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [2] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [3] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [4] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [5] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [6] = {"system module error", "report this issue to LIVOX with the log file"},
+                [7] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [8] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [9] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [10] = {"system module error", "report this issue to LIVOX with the log file"},
+                [11] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [12] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [13] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [14] = {"system module warning and lidar inside sensor measured temperature is out of range", "check the lidar environment temperature is in the range of -40℃ to 85℃ and report this issue to LIVOX with the log file"},
+                [15] = {"system module error", "report this issue to LIVOX with the log file"},
+                [16] = {"system module warning and the window heater has fault and can't heat the window. Point cloud data could be used normally", "report this issue to LIVOX with the log file"},
+                [17] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [18] = {"system module error", "report this issue to LIVOX with the log file"},
+                [19] = {"system module warning and the network connection is link down", "check the ethernet cable connection normally and report this issue to LIVOX with the log file"},
+                [20] = {"system module warning and the network connection quality is poor", "check no electromagnetic interference existed and report this issue to LIVOX with the log file"},
+                [21] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [22] = {"system module error and and lidar inside sensor measured temperature is out of range", "check the lidar environment temperature is in the range of -40℃ to 85℃ and report this issue to LIVOX with the log file"},
+                [23] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [24] = {"system module error and the supply voltage of the lidar is out of range", "check whether the supply voltage is normal(9.0~32v) and report this issue to LIVOX with the log file"},
+                [25] = {"system module error", "report this issue to LIVOX with the log file"},
+                [26] = {"system module warning and window dirty", "check whether the lidar window is dirty and try to clean the window"},
+                [27] = {"system module warning and window block", "check whether the lidar window is blocked and try to remove the obstacle."},
+                [28] = {"system module warning", "report this issue to LIVOX with the log file"},
+                [29] = {"system module warning and lidar received ethernet message with CRC abnormal", "check whether the CRC of the command ethernet message from host is correctly and report this issue to LIVOX with the log file"},
+                [30] = {"system module warning and time synchronize warning", "check whether the time synchronization master is configured correctly and report this issue to LIVOX with the log file"},
+                [31] = {"system module warning", "report this issue to LIVOX with the log file"},
+            }
+            local bit_meaning = {
+                [0] = "fault vanish in current cycle and no fault confirmed",
+                [1] = "fault occur in current cycle and fault not confirmed",
+                [2] = "fault vanish in current cycle and no fault not confirmed",
+                [3] = "fault occur in current cycle and fault confirmed"
+            }
+            local function to2bitstr(val)
+                local hi = bit.rshift(val,1)
+                local lo = bit.band(val,1)
+                return tostring(hi)..tostring(lo)
+            end
+            for i=0,7 do
+                local byte = data_bytes(i,1):uint()
+                for b=0,3 do
+                    local idx = i*4 + b
+                    local bits = bit.band(bit.rshift(byte, b*2), 0x03)
+                    local label = fault_labels[idx] and fault_labels[idx][1] or "Reserved"
+                    local suggestion = fault_labels[idx] and fault_labels[idx][2] or ""
+                    local meaning = bit_meaning[bits] or "Reserved"
+                    local bits_str = to2bitstr(bits)
+                    local desc
+                    if bits ~= 0 then
+                        desc = string.format(
+                            "Byte%d Bit%d-%d: [%s] Value: %s, %s. Suggestion: %s",
+                            i, b*2, b*2+1, label, bits_str, meaning, suggestion
+                        )
+                    else
+                        desc = string.format(
+                            "Byte%d Bit%d-%d: [%s] Value: %s, %s",
+                            i, b*2, b*2+1, label, bits_str, meaning
+                        )
+                    end
+                    status_tree:add(data_bytes(i,1), desc)
+                end
+            end
+
+        elseif key == 0x800F then
+            -- Flash状态
+            local val_map = {
+                [0x00] = "idle",
+                [0x01] = "busy"
+            }
+            local val = val_map[data_bytes(0,1):uint()] or string.format("未知(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_lidar_flash_status, data_bytes(0,1), val)
+
+        elseif key == 0x8012 then
+            -- 当前窗口加热状态
+            local val_map = {
+                [0x00] = "未加热",
+                [0x01] = "正在加热"
+            }
+            local val = val_map[data_bytes(0,1):uint()] or string.format("未知(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_cur_glass_heat_state, data_bytes(0,1), val)
+
         else
-            -- 未知字段
-            -- subtree:add(buffer(index-length-4, length+4), string.format("未知字段_%04X", key))
+            --未知字段
+            subtree:add(buffer(index-length-4, length+4), string.format("未知字段_%04X", key))
         end
     end
 end
 
 
 local udp_port = DissectorTable.get("udp.port")
-udp_port:add(56200, livox_proto)
-udp_port:add(56201, livox_proto)
+udp_port:add(56200, livox_pushmsg_proto)
+udp_port:add(56000, livox_pushmsg_proto)
+
+----------------------------------------------------------------------------------------------------------------
+--解析点云&IMU数据
+
+local livox_data_proto = Proto("LivoxData", "Livox Data")
+
+local f_version = ProtoField.uint8("livoxdata.version", "version")
+local f_length = ProtoField.uint16("livoxdata.length", "Length", base.DEC)
+local f_time_interval = ProtoField.uint16("livoxdata.time_interval", "Time Interval (0.1us)", base.DEC)
+local f_dot_num = ProtoField.uint16("livoxdata.dot_num", "Dot Num", base.DEC)
+local f_udp_cnt = ProtoField.uint16("livoxdata.udp_cnt", "UDP Count", base.DEC)
+local f_frame_cnt = ProtoField.uint8("livoxdata.frame_cnt", "Frame Count", base.DEC)
+local f_data_type = ProtoField.uint8("livoxdata.data_type", "Data Type", base.HEX)
+local f_time_type = ProtoField.uint8("livoxdata.time_type", "Time Type", base.HEX)
+local f_reserved = ProtoField.bytes("livoxdata.reserved", "Reserved")
+local f_crc32 = ProtoField.uint32("livoxdata.crc32", "CRC32", base.HEX)
+local f_timestamp = ProtoField.uint64("livoxdata.timestamp", "Timestamp", base.DEC)
+local f_data = ProtoField.bytes("livoxdata.data", "Data")
+local f_gyro_x = ProtoField.float("livoxdata.gyro_x", "gyro_x", base.DEC)
+local f_gyro_y = ProtoField.float("livoxdata.gyro_y", "gyro_y", base.DEC)
+local f_gyro_z = ProtoField.float("livoxdata.gyro_z", "gyro_z", base.DEC)
+local f_acc_x  = ProtoField.float("livoxdata.acc_x",  "acc_x",  base.DEC, nil, nil, "IMU加速度X(g)")
+local f_acc_y  = ProtoField.float("livoxdata.acc_y",  "acc_y",  base.DEC, nil, nil, "IMU加速度Y(g)")
+local f_acc_z  = ProtoField.float("livoxdata.acc_z",  "acc_z",  base.DEC, nil, nil, "IMU加速度Z(g)")
+
+livox_data_proto.fields = {
+    f_version, f_length, f_time_interval, f_dot_num, f_udp_cnt, f_frame_cnt,
+    f_data_type, f_time_type, f_reserved, f_crc32, f_timestamp, f_data,
+    f_gyro_x, f_gyro_y, f_gyro_z, f_acc_x, f_acc_y, f_acc_z
+}
+
+function livox_data_proto.dissector(buffer, pinfo, tree)
+    pinfo.cols.protocol = "LivoxData"
+    local subtree = tree:add(livox_data_proto, buffer(), "Livox PointCloud Data")
+
+    -- 头部字段
+    local version_val = buffer(0,1):uint()
+    subtree:add(f_version, buffer(0,1), version_val, string.format("version (协议版本): %d", version_val))
+    local length_val = buffer(1,2):le_uint()
+    subtree:add(f_length, buffer(1,2), length_val, string.format("length (UDP数据段长度): %d", length_val))
+    local time_interval_val = buffer(3,2):le_uint()
+    subtree:add(f_time_interval, buffer(3,2), time_interval_val, string.format("time_interval (帧内点采样时间, 0.1μs): %d", time_interval_val))
+    local dot_num = buffer(5,2):le_uint()
+    subtree:add(f_dot_num, buffer(5,2), dot_num, string.format("dot_num (当前UDP包点数): %d", dot_num))
+    local udp_cnt_val = buffer(7,2):le_uint()
+    subtree:add(f_udp_cnt, buffer(7,2), udp_cnt_val, string.format("udp_cnt (UDP包计数): %d", udp_cnt_val))
+    local frame_cnt_val = buffer(9,1):uint()
+    subtree:add(f_frame_cnt, buffer(9,1), frame_cnt_val, string.format("frame_cnt (点云帧计数): %d", frame_cnt_val))
+    local data_type = buffer(10,1):uint()
+    subtree:add(f_data_type, buffer(10,1), data_type, string.format("data_type (数据类型): %d", data_type))
+    local time_type_val = buffer(11,1):uint()
+    subtree:add(f_time_type, buffer(11,1), time_type_val, string.format("time_type (时间戳类型): %d", time_type_val))
+    subtree:add(f_reserved, buffer(12,12))
+    local crc32_val = buffer(24,4):le_uint()
+    subtree:add(f_crc32, buffer(24,4), crc32_val, string.format("crc32 (CRC32校验): 0x%08X", crc32_val))
+    local ts_val = buffer(28,8):le_uint64()
+    subtree:add(f_timestamp, buffer(28,8), ts_val, "timestamp (时间戳): " .. tostring(ts_val))
+
+    -- data字段解析
+    local data_offset = 36
+    if buffer:len() > data_offset then
+        -- 解析IMU数据
+        if data_type == 0 and buffer:len() >= data_offset + 24 then
+            local data_len = buffer:len() - data_offset
+            if data_len > 0 then
+                subtree:add(f_data, buffer(data_offset, data_len))
+            end
+
+            local gyro_x_val = buffer(data_offset+0,4):le_float()
+            subtree:add(f_gyro_x, buffer(data_offset+0,4), gyro_x_val, string.format("gyro_x (rad/s): %.10f", gyro_x_val))
+            local gyro_y_val = buffer(data_offset+4,4):le_float()
+            subtree:add(f_gyro_y, buffer(data_offset+4,4), gyro_y_val, string.format("gyro_y (rad/s): %.10f", gyro_y_val))
+            local gyro_z_val = buffer(data_offset+8,4):le_float()
+            subtree:add(f_gyro_z, buffer(data_offset+8,4), gyro_z_val, string.format("gyro_z (rad/s): %.10f", gyro_z_val))
+            local acc_x_val = buffer(data_offset+12,4):le_float()
+            subtree:add(f_acc_x, buffer(data_offset+12,4), acc_x_val, string.format("acc_x (g): %.10f", acc_x_val))
+            local acc_y_val = buffer(data_offset+16,4):le_float()
+            subtree:add(f_acc_y, buffer(data_offset+16,4), acc_y_val, string.format("acc_y (g): %.10f", acc_y_val))
+            local acc_z_val = buffer(data_offset+20,4):le_float()
+            subtree:add(f_acc_z, buffer(data_offset+20,4), acc_z_val, string.format("acc_z (g): %.10f", acc_z_val))
+            
+        else
+            -- 点云数据结构化解析
+            -- local point_size = 0
+            -- local point_type_desc = ""
+            -- if data_type == 1 then
+            --     point_size = 14
+            --     point_type_desc = "直角坐标32bit"
+            -- elseif data_type == 2 then
+            --     point_size = 8
+            --     point_type_desc = "直角坐标16bit"
+            -- elseif data_type == 3 then
+            --     point_size = 10
+            --     point_type_desc = "球坐标"
+            -- end
+
+            -- if point_size > 0 and dot_num > 0 and buffer:len() >= data_offset + point_size * dot_num then
+            --     local point_desc = string.format("点云数据 (类型: %d, %s, %d个点)", data_type, point_type_desc, dot_num)
+            --     local points_tree = subtree:add(f_data, buffer(data_offset, point_size * dot_num))
+            --     points_tree:set_text(point_desc)
+            --     
+            --     for i=0, dot_num-1 do
+            --         local base = data_offset + i * point_size
+            --         if base + point_size > buffer:len() then break end
+            --         if data_type == 1 then
+            --             local x = buffer(base,4):le_int()
+            --             local y = buffer(base+4,4):le_int()
+            --             local z = buffer(base+8,4):le_int()
+            --             local reflect = buffer(base+12,1):uint()
+            --             local tag = buffer(base+13,1):uint()
+            --             points_tree:add(buffer(base,point_size), string.format("Point %d: X=%dmm Y=%dmm Z=%dmm 反射率=%d Tag=%d", i+1, x, y, z, reflect, tag))
+            --         elseif data_type == 2 then
+            --             local x = buffer(base,2):le_int()
+            --             local y = buffer(base+2,2):le_int()
+            --             local z = buffer(base+4,2):le_int()
+            --             local reflect = buffer(base+6,1):uint()
+            --             local tag = buffer(base+7,1):uint()
+            --             points_tree:add(buffer(base,point_size), string.format("Point %d: X=%d*10mm Y=%d*10mm Z=%d*10mm Tag=%d 标签=%d", i+1, x, y, z, reflect, tag))
+            --         elseif data_type == 3 then
+            --             local depth = buffer(base,4):le_uint()
+            --             local zenith = buffer(base+4,2):le_uint()
+            --             local azimuth = buffer(base+6,2):le_uint()
+            --             local reflect = buffer(base+8,1):uint()
+            --             local tag = buffer(base+9,1):uint()
+            --             points_tree:add(buffer(base,point_size), string.format("Point %d: 深度=%dmm 天顶角=%.2f° 方位角=%.2f° 反射率=%d Tag=%d", i+1, depth, zenith/100, azimuth/100, reflect, tag))
+            --         end
+            --     end
+            --     if buffer:len() > data_offset + point_size * dot_num then
+            --         points_tree:add(buffer(data_offset + point_size * dot_num, buffer:len() - data_offset - point_size * dot_num), "剩余原始数据")
+            --     end
+            -- else
+                subtree:add(f_data, buffer(data_offset, buffer:len()-data_offset))
+            -- end
+        end
+    end
+end
+
+
+
+
+udp_port:add(56300, livox_data_proto)
+udp_port:add(56400, livox_data_proto)
+udp_port:add(57000, livox_data_proto)
+udp_port:add(58000, livox_data_proto)
+
