@@ -598,7 +598,7 @@ livox_data_proto.fields = {
 
 function livox_data_proto.dissector(buffer, pinfo, tree)
     pinfo.cols.protocol = "LivoxData"
-    local subtree = tree:add(livox_data_proto, buffer(), "Livox PointCloud Data")
+    local subtree = tree:add(livox_data_proto, buffer(), "Livox Data")
 
     -- 头部字段
     local version_val = buffer(0,1):uint()
