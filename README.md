@@ -1,4 +1,4 @@
-# Livox Mid-360 & HAP Radar Data Wireshark Lua Plugin
+# Livox Mid-360 & HAP Wireshark Lua Plugin
 
 一个用于解析 Livox Mid-360 和 HAP 雷达数据的 Wireshark Lua 插件。它可以将原始 UDP 数据包中的信息以易读的方式显示在 Wireshark 协议树中。
 
