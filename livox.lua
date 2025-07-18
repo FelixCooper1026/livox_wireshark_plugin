@@ -12,6 +12,7 @@
 -- 2025-06-09：修复time_offset数据类型解析错误，应为 int64_t
 -- 2025-06-23：增加 HAP 雷达解析支持
 -- 2025-06-26：增加对点云及IMU数据的解析
+-- 0025-07-17：增加对控制指令帧的解析
 -------------------------------------------------------------------------------
 
 
@@ -113,25 +114,422 @@ local fault_level_dict = {
     ["0400"] = "Fatal严重错误"
 }
 
+-- cmd_id 含义映射表
+local cmd_id_desc = {
+    [0x0000] = "广播发现",
+    [0x0100] = "参数信息配置",
+    [0x0101] = "雷达信息查询",
+    [0x0102] = "雷达信息推送",
+    [0x0200] = "请求设备重启",
+    [0x0201] = "恢复出厂设置",
+    [0x0202] = "设置雷达GPS时间同步时间戳",
+    [0x0300] = "log文件推送",
+    [0x0301] = "log采集配置",
+    [0x0302] = "log系统时间同步",
+    [0x0303] = "debug点云采集配置",
+    [0x0400] = "请求开始升级",
+    [0x0401] = "固件数据传输",
+    [0x0402] = "固件传输结束",
+    [0x0403] = "获取固件升级状态"
+}
+
+-- 返回码映射表
+local ret_code_map = {
+    [0x00] = "执行成功",
+    [0x01] = "执行失败",
+    [0x02] = "当前状态不支持",
+    [0x03] = "设置值超出范围",
+    [0x20] = "参数不支持",
+    [0x21] = "参数需重启生效",
+    [0x22] = "参数只读，不支持写入",
+    [0x23] = "请求参数长度错误，或ack数据包超过最大长度",
+    [0x24] = "参数key_num和key_list不匹配",
+    [0x30] = "公钥签名验证错误",
+    [0x31] = "固件摘要签名验证错误",
+    [0x32] = "固件类型不匹配",
+    [0x33] = "固件长度超出范围",
+    [0x34] = "固件擦除中"
+}
+
+-- key 含义和格式映射表（参考336-762行）
+local key_map = {
+    [0x0000] = {name="点云坐标格式", fmt=function(b) local v=b(0,1):uint(); local t={[0x01]="直角坐标(32bits)",[0x02]="直角坐标(16bits)",[0x03]="球坐标"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0001] = {name="扫描模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="非重复扫描",[0x01]="重复扫描",[0x02]="低帧率重复扫描模式"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0003] = {name="点云发送控制", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="进入工作模式发送点云",[0x01]="进入工作模式不发送点云"}; return t[v] or string.format("未知(0x%02X)",v) end, len=1},
+    [0x0004] = {name="雷达IP信息", fmt=function(b) return string.format("IP地址：%d.%d.%d.%d 子网掩码：%d.%d.%d.%d 网关：%d.%d.%d.%d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint(),b(3,1):uint(),b(4,1):uint(),b(5,1):uint(),b(6,1):uint(),b(7,1):uint(),b(8,1):uint(),b(9,1):uint(),b(10,1):uint(),b(11,1):uint()) end, len=12},
+    [0x0005] = {name="推送数据目标地址", fmt=function(b) return string.format("IP: %d.%d.%d.%d 端口: %d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint(),b(3,1):uint(),b(4,2):le_uint()) end, len=6},
+    [0x0006] = {name="点云数据目标地址", fmt=function(b) return string.format("IP: %d.%d.%d.%d 端口: %d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint(),b(3,1):uint(),b(4,2):le_uint()) end, len=6},
+    [0x0007] = {name="IMU数据目标地址", fmt=function(b) return string.format("IP: %d.%d.%d.%d 端口: %d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint(),b(3,1):uint(),b(4,2):le_uint()) end, len=6},
+    [0x0012] = {name="外参配置", fmt=function(b) return string.format("Roll: %.2f°, Pitch: %.2f°, Yaw: %.2f°, X: %dmm, Y: %dmm, Z: %dmm",b(0,4):le_float(),b(4,4):le_float(),b(8,4):le_float(),b(12,4):le_int(),b(16,4):le_int(),b(20,4):le_int()) end, len=24},
+    [0x0015] = {name="FOV0配置", fmt=function(b) return string.format("水平：%d° ~ %d°, 垂直：%d° ~ %d°",b(0,4):le_int(),b(4,4):le_int(),b(8,4):le_int(),b(12,4):le_int()) end, len=16},
+    [0x0016] = {name="FOV1配置", fmt=function(b) return string.format("水平：%d° ~ %d°, 垂直：%d° ~ %d°",b(0,4):le_int(),b(4,4):le_int(),b(8,4):le_int(),b(12,4):le_int()) end, len=16},
+    [0x0017] = {name="FOV使能", fmt=function(b) local v=b(0,1):uint(); return string.format("FOV0:%s FOV1:%s",bit.band(v,0x01)~=0 and "开启" or "关闭",bit.band(v,0x02)~=0 and "开启" or "关闭") end, len=1},
+    [0x0018] = {name="探测模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="正常探测模式",[0x01]="敏感探测模式"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0019] = {name="功能线配置", fmt=function(b) local s='' for i=0,b:len()-1 do s=s..tostring(b(i,1):uint()) if i<b:len()-1 then s=s..'.' end end return s end},
+    [0x001A] = {name="目标工作模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x01]="采样",[0x02]="待机",[0x04]="错误",[0x05]="自检",[0x06]="电机启动",[0x08]="升级",[0x09]="就绪"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x001C] = {name="IMU数据输出", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="关闭",[0x01]="开启"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x8000] = {name="SN号", fmt=function(b) return b:stringz() end},
+    [0x8001] = {name="产品信息", fmt=function(b) return b:stringz() end},
+    [0x8002] = {name="固件版本", fmt=function(b) if b:len()>=4 then return string.format("%d.%d.%04d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint()*100+b(3,1):uint()) else return "" end end, len=4},
+    [0x8003] = {name="Loader版本", fmt=function(b) local s='' for i=0,b:len()-1 do s=s..tostring(b(i,1):uint()) if i<b:len()-1 then s=s..'.' end end return s end},
+    [0x8004] = {name="硬件版本", fmt=function(b) local s='' for i=0,b:len()-1 do s=s..tostring(b(i,1):uint()) if i<b:len()-1 then s=s..'.' end end return s end},
+    [0x8005] = {name="MAC地址", fmt=function(b) local s='' for i=0,5 do s=s..string.format("%02X",b(i,1):uint()) if i<5 then s=s..":" end end return s end, len=6},
+    [0x8006] = {name="当前工作状态", fmt=function(b) local v=b(0,1):uint(); local t={[0x01]="采样",[0x02]="待机",[0x04]="错误",[0x05]="自检",[0x06]="电机启动",[0x08]="升级",[0x09]="就绪"}; return t[v] or string.format("未知状态(0x%02X)",v) end, len=1},
+    [0x8007] = {name="核心板温度", fmt=function(b) return string.format("%.2f ℃",b(0,4):le_int()/100.0) end, len=4},
+    [0x8008] = {name="上电次数", fmt=function(b) return string.format("%d 次",b(0,4):le_uint()) end, len=4},
+    [0x8009] = {name="雷达本地时间", fmt=function(b) local t=tonumber(tostring(b(0,8):le_uint64()))/1000000 return string.format("%.3f ms",t) end, len=8},
+    [0x800A] = {name="上一次同步的master时间", fmt=function(b) local t=tonumber(tostring(b(0,8):le_uint64()))/1000000 return string.format("%.3f ms",t) end, len=8},
+    [0x800B] = {name="时间偏移", fmt=function(b) local t=tonumber(tostring(b(0,8):le_int64()))/1000 return string.format("%.3f us",t) end, len=8},
+    [0x800C] = {name="时间同步方式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="无时间同步",[0x01]="PTP(IEEE 1588v2.0)",[0x02]="GPS"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x800E] = {name="异常码", fmt=function(b) return string.format("0x%04X",b(0,2):le_uint()) end, len=2},
+    [0x8010] = {name="固件类型", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="loader",[0x01]="application_image"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x8012] = {name="当前窗口加热状态", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="未加热",[0x01]="正在加热"}; return t[v] or string.format("未知(0x%02X)",v) end, len=1},
+    [0x800F] = {name="Flash状态", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="idle",[0x01]="busy"}; return t[v] or string.format("未知(0x%02X)",v) end, len=1},
+    [0x0013] = {name="盲区范围设置", fmt=function(b) return string.format("%d cm (范围50~200cm)",b(0,4):le_uint()) end, len=4},
+    [0x001B] = {name="窗口加热支持", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="禁止窗口加热功能",[0x01]="允许窗口加热功能"}; return t[v] or string.format("未知(0x%02X)",v) end, len=1},
+    [0x001D] = {name="FUSA诊断功能", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="关闭fusa诊断功能",[0x01]="开启fusa诊断功能"}; return t[v] or string.format("未知(0x%02X)",v) end, len=1},
+    [0x001E] = {name="强制加热", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="关闭强制加热",[0x01]="开启强制加热"}; return t[v] or string.format("未知(0x%02X)",v) end, len=1},
+    [0x0020] = {name="开机初始化工作模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="待机状态(默认值)",[0x01]="采样状态",[0x02]="待机状态"}; return t[v] or string.format("未知(0x%02X)",v) end, len=1},
+    [0x800D] = {name="状态码", fmt=function(b) local s="0x"; for i=0,7 do s=s..string.format("%02X",b(i,1):uint()) end; return s end, len=8},
+    [0x8011] = {
+        name = "HMS诊断码",
+        fmt = function(b)
+            local fault_id_dict = {
+                ["0000"] = "无故障",
+                ["0102"] = "设备运行环境温度偏高;请检查环境温度，或排查散热措施",
+                ["0103"] = "设备运行环境温度较高;请检查环境温度，或排查散热措施",
+                ["0104"] = "设备球形光窗存在脏污,设备点云数据可信度较差;请及时清洗擦拭设备的球形光窗",
+                ["0105"] = "设备升级过程中出现错误;请重新进行升级",
+                ["0111"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
+                ["0112"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
+                ["0113"] = "设备内部IMU器件暂停工作;请重启设备恢复",
+                ["0114"] = "设备运行环境温度高;请检查环境温度，或排查散热措施",
+                ["0115"] = "设备运行环境温度超过承受极限，设备已停止工作;请检查环境温度，或排查散热措施",
+                ["0116"] = "设备外部电压异常;请检查外部电压",
+                ["0117"] = "设备参数异常;请尝试重启设备恢复",
+                ["0201"] = "扫描模块低温加热中",
+                ["0210"] = "扫描模块异常",
+                ["0211"] = "扫描模块异常",
+                ["0212"] = "扫描模块异常",
+                ["0213"] = "扫描模块异常",
+                ["0214"] = "扫描模块异常",
+                ["0215"] = "扫描模块异常",
+                ["0216"] = "扫描模块异常",
+                ["0217"] = "扫描模块异常",
+                ["0218"] = "扫描模块异常",
+                ["0219"] = "扫描模块异常",
+                ["0401"] = "检测到以太网连接曾断开过，请检查以太网链路是否存在异常",
+                ["0402"] = "ptp同步中断，或者时间跳变太大，请排查ptp时钟源是否工作正常",
+                ["0403"] = "PTP版本为1588-V2.1版本，设备不支持该版本，请更换1588-V2.0版本进行同步",
+                ["0404"] = "PPS同步异常，请检查PPS及GPS信号",
+                ["0405"] = "时间同步曾经发生过异常，请检查发生异常原因",
+                ["0406"] = "时间同步精度低，请检查同步源",
+                ["0407"] = "缺失GPS信号导致GPS同步失败，请检查GPS信号",
+                ["0408"] = "缺失PPS信号导致GPS同步失败，请检查PPS信号",
+                ["0409"] = "GPS信号异常，请检查GPS信号源",
+                ["040A"] = "PTP和gPTP信号同时存在，同步存在问题；请检查网络拓扑，单独使用PTP或gPTP同步"
+            }
+            local res = {}
+            local fault_count = 0
+            for i = 0, 7 do
+                if b:len() < (i+1)*4 then break end
+                local code = b(i*4, 4):le_uint()
+                if code ~= 0 then
+                    fault_count = fault_count + 1
+                    local fault_id = bit.rshift(code, 16)
+                    local fault_level = bit.band(code, 0xFF)
+                    local fault_id_str = string.format("%04X", fault_id)
+                    local level_map = { [0x01] = "Info 消息", [0x02] = "Warning 警告", [0x03] = "Error 错误", [0x04] = "Fatal 严重错误" }
+                    local level_desc = level_map[fault_level] or "未知等级"
+                    local fault_desc = fault_id_dict[fault_id_str] or string.format("未知故障ID (0x%04X)", fault_id)
+                    table.insert(res, string.format("[%d] 0x%08X [%s] %s", fault_count, code, level_desc, fault_desc))
+                end
+            end
+            if fault_count == 0 then
+                return "无故障"
+            else
+                return table.concat(res, "\n")
+            end
+        end,
+        len = 32
+    },
+}
+
+-- 优化后的key-value list解析函数
+local function parse_kv_list(buffer, offset, count, tree)
+    for i=1,count do
+        if offset+4 > buffer:len() then break end
+        local key = buffer(offset,2):le_uint()
+        local vlen = buffer(offset+2,2):le_uint()
+        if offset+4+vlen > buffer:len() then break end
+        local value_buf = buffer(offset+4, vlen)
+        local key_hex = string.format("0x%04X", key)
+        local desc = key_map[key] and key_map[key].name or "未知"
+        local val_str = ""
+        if key_map[key] then
+            local fmt = key_map[key].fmt
+            if key == 0x8011 then
+                -- HMS诊断码特殊处理，分行显示
+                local hms_tree = tree:add(buffer(offset,4+vlen), string.format("key: %s %s", key_hex, desc))
+                local b = value_buf
+                local fault_count = 0
+                for i = 0, 7 do
+                    if b:len() < (i+1)*4 then break end
+                    local code = b(i*4, 4):le_uint()
+                    if code ~= 0 then
+                        fault_count = fault_count + 1
+                        local fault_id = bit.rshift(code, 16)
+                        local fault_level = bit.band(code, 0xFF)
+                        local fault_id_str = string.format("%04X", fault_id)
+                        local level_map = { [0x01] = "Info 消息", [0x02] = "Warning 警告", [0x03] = "Error 错误", [0x04] = "Fatal 严重错误" }
+                        local level_desc = level_map[fault_level] or "未知等级"
+                        local fault_desc = fault_id_dict[fault_id_str] or string.format("未知故障ID (0x%04X)", fault_id)
+                        local fault_info = string.format("[诊断码%d] 0x%08X [%s] %s", fault_count, code, level_desc, fault_desc)
+                        hms_tree:add(value_buf(i*4, 4), fault_info)
+                    end
+                end
+                if fault_count == 0 then
+                    hms_tree:add(value_buf(0, math.min(32, value_buf:len())), "无故障")
+                end
+            else
+                val_str = fmt(value_buf)
+                local show = string.format("key: %s %s：%s", key_hex, desc, val_str)
+                tree:add(buffer(offset,4+vlen), show)
+            end
+        end
+        offset = offset + 4 + vlen
+    end
+    return offset
+end
+
+-- 控制指令解析函数
+local function parse_control_cmd(buffer, pinfo, tree)
+    pinfo.cols.protocol = "LivoxCtrlCmd"
+    local subtree = tree:add(buffer(), "Livox 控制指令帧")
+    if buffer:len() < 24 then
+        subtree:add_expert_info(PI_MALFORMED, PI_ERROR, "控制指令包长度不足")
+        return
+    end
+    subtree:add(buffer(0,1), "sof: 0x" .. string.format("%02X", buffer(0,1):uint()))
+    subtree:add(buffer(1,1), "version: " .. buffer(1,1):uint())
+    subtree:add(buffer(2,2), "length: " .. buffer(2,2):le_uint())
+    subtree:add(buffer(4,4), "seq_num: " .. buffer(4,4):le_uint())
+    local cmd_id = buffer(8,2):le_uint()
+    local cmd_id_hex = string.format("0x%04X", cmd_id)
+    local cmd_id_str = cmd_id_desc[cmd_id] or "未知"
+    subtree:add(buffer(8,2), string.format("cmd_id: %s (%s)", cmd_id_hex, cmd_id_str))
+    local cmd_type = buffer(10,1):uint()
+    local cmd_type_str = (cmd_type == 0x00) and "REQ（请求）" or ((cmd_type == 0x01) and "ACK（应答）" or string.format("未知(0x%02X)", cmd_type))
+    subtree:add(buffer(10,1), "cmd_type: " .. cmd_type_str)
+    local sender_type = buffer(11,1):uint()
+    local sender_type_str = (sender_type == 0x00) and "上位机" or ((sender_type == 0x01) and "雷达" or string.format("未知(0x%02X)", sender_type))
+    subtree:add(buffer(11,1), "sender_type: " .. sender_type_str)
+    subtree:add(buffer(12,6), "resv:（保留位）")
+    subtree:add(buffer(18,2), "crc16: 0x" .. string.format("%04X", buffer(18,2):le_uint()))
+    subtree:add(buffer(20,4), "crc32: 0x" .. string.format("%08X", buffer(20,4):le_uint()))
+    local data_offset = 24
+    local data_len = buffer:len() - data_offset
+    if data_len <= 0 then return end
+    local data_buf = buffer(data_offset, data_len)
+    local data_tree = subtree:add(data_buf, "Data:")
+    if cmd_id == 0x0000 then -- 广播发现
+        if cmd_type == 0x01 and data_len >= 24 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code（返回码）: 0x%02X (%s)", ret, ret_str))
+            data_tree:add(data_buf(1,1), "dev_type（设备类型）: " .. data_buf(1,1):uint())
+            data_tree:add(data_buf(2,16), "serial_number（雷达SN）: " .. data_buf(2,16):string())
+            local ip = string.format("%d.%d.%d.%d", data_buf(18,1):uint(), data_buf(19,1):uint(), data_buf(20,1):uint(), data_buf(21,1):uint())
+            data_tree:add(data_buf(18,4), "lidar_ip（雷达IP地址）: " .. ip)
+            data_tree:add(data_buf(22,2), "cmd_port（当前控制指令端口）: " .. data_buf(22,2):le_uint())
+        end
+    elseif cmd_id == 0x0100 then -- 参数信息配置
+        if cmd_type == 0x00 and data_len >= 4 then -- REQ
+            data_tree:add(data_buf(0,2), "key_num: " .. data_buf(0,2):le_uint())
+            data_tree:add(data_buf(2,2), "rsvd: " .. data_buf(2,2):le_uint())
+            local key_num = data_buf(0,2):le_uint()
+            parse_kv_list(data_buf, 4, key_num, data_tree)
+        elseif cmd_type == 0x01 and data_len >= 3 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+            data_tree:add(data_buf(1,2), "error_key: " .. data_buf(1,2):le_uint())
+        end
+    elseif cmd_id == 0x0101 then -- 雷达信息查询
+        if cmd_type == 0x00 and data_len >= 4 then -- REQ
+            data_tree:add(data_buf(0,2), "key_num: " .. data_buf(0,2):le_uint())
+            data_tree:add(data_buf(2,2), "rsvd: " .. data_buf(2,2):le_uint())
+            local key_num = data_buf(0,2):le_uint()
+            local offset = 4
+            for i=1,key_num do
+                if offset+2 > data_len then break end
+                local key = data_buf(offset,2):le_uint()
+                local key_hex = string.format("0x%04X", key)
+                local desc = key_map[key] and key_map[key].name or "未知"
+                data_tree:add(data_buf(offset,2), string.format("key: %s %s", key_hex, desc))
+                offset = offset + 2
+            end
+        elseif cmd_type == 0x01 and data_len >= 3 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+            data_tree:add(data_buf(1,2), "key_num: " .. data_buf(1,2):le_uint())
+            local key_num = data_buf(1,2):le_uint()
+            parse_kv_list(data_buf, 3, key_num, data_tree)
+        end
+    elseif cmd_id == 0x0102 then -- 雷达信息推送
+        if data_len >= 4 then
+            data_tree:add(data_buf(0,2), "key_num: " .. data_buf(0,2):le_uint())
+            data_tree:add(data_buf(2,2), "rsvd: " .. data_buf(2,2):le_uint())
+            local key_num = data_buf(0,2):le_uint()
+            parse_kv_list(data_buf, 4, key_num, data_tree)
+        end
+    elseif cmd_id == 0x0200 then -- 请求设备重启
+        if cmd_type == 0x00 and data_len >= 2 then -- REQ
+            data_tree:add(data_buf(0,2), "timeout(ms): " .. data_buf(0,2):le_uint())
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0201 then -- 恢复出厂设置
+        if cmd_type == 0x00 and data_len >= 16 then -- REQ
+            data_tree:add(data_buf(0,16), "SN (预留字段)")
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0202 then -- 设置GPS时间同步时间戳
+        if cmd_type == 0x00 and data_len >= 9 then -- REQ
+            data_tree:add(data_buf(0,1), "type: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,8), "time_set(ns): " .. tostring(data_buf(1,8):le_uint64()))
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0300 then -- log文件推送
+        if cmd_type == 0x00 and data_len >= 16 then -- REQ
+            data_tree:add(data_buf(0,1), "log_type: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,1), "file_index: " .. data_buf(1,1):uint())
+            data_tree:add(data_buf(2,1), "file_num: " .. data_buf(2,1):uint())
+            data_tree:add(data_buf(3,1), "flag: 0x" .. string.format("%02X", data_buf(3,1):uint()))
+            data_tree:add(data_buf(4,4), "timestamp: " .. data_buf(4,4):le_uint())
+            data_tree:add(data_buf(8,2), "rsvd: " .. data_buf(8,2):le_uint())
+            data_tree:add(data_buf(10,4), "trans_index: " .. data_buf(10,4):le_uint())
+            data_tree:add(data_buf(14,2), "log_data_len: " .. data_buf(14,2):le_uint())
+            local log_data_len = data_buf(14,2):le_uint()
+            if data_len >= 16+log_data_len then
+                data_tree:add(data_buf(16,log_data_len), "log_data")
+            end
+        elseif cmd_type == 0x01 and data_len >= 8 then -- ACK
+            data_tree:add(data_buf(0,1), "ret_code: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,1), "log_type: " .. data_buf(1,1):uint())
+            data_tree:add(data_buf(2,1), "file_index: " .. data_buf(2,1):uint())
+            data_tree:add(data_buf(3,4), "trans_index: " .. data_buf(3,4):le_uint())
+        end
+    elseif cmd_id == 0x0301 then -- log采集配置
+        if cmd_type == 0x00 and data_len >= 2 then -- REQ
+            data_tree:add(data_buf(0,1), "log_type: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,1), "enable: " .. data_buf(1,1):uint())
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0302 then -- log系统时间同步
+        if cmd_type == 0x00 and data_len >= 4 then -- REQ
+            data_tree:add(data_buf(0,4), "timestamp: " .. data_buf(0,4):le_uint())
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0303 then -- debug点云采集配置
+        if cmd_type == 0x00 and data_len >= 9 then -- REQ
+            data_tree:add(data_buf(0,1), "enable: " .. data_buf(0,1):uint())
+            local ip = string.format("%d.%d.%d.%d", data_buf(1,1):uint(), data_buf(2,1):uint(), data_buf(3,1):uint(), data_buf(4,1):uint())
+            data_tree:add(data_buf(1,4), "host_ip: " .. ip)
+            data_tree:add(data_buf(5,2), "host_port: " .. data_buf(5,2):le_uint())
+            data_tree:add(data_buf(7,2), "reserved: " .. data_buf(7,2):le_uint())
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0400 then -- 请求开始升级
+        if cmd_type == 0x00 and data_len >= 7 then -- REQ
+            data_tree:add(data_buf(0,1), "firmware_type: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,1), "encrypt_type: " .. data_buf(1,1):uint())
+            data_tree:add(data_buf(2,4), "firmware_length: " .. data_buf(2,4):le_uint())
+            data_tree:add(data_buf(6,1), "dev_type: " .. data_buf(6,1):uint())
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0401 then -- 固件数据传输
+        if cmd_type == 0x00 and data_len >= 12 then -- REQ
+            data_tree:add(data_buf(0,4), "firmware_offset: " .. data_buf(0,4):le_uint())
+            data_tree:add(data_buf(4,4), "current_length: " .. data_buf(4,4):le_uint())
+            data_tree:add(data_buf(8,1), "encrypt_type: " .. data_buf(8,1):uint())
+            data_tree:add(data_buf(9,3), "rsvd")
+            local remain = data_len - 12
+            if remain > 0 then
+                data_tree:add(data_buf(12,remain), "data (固件内容)")
+            end
+        elseif cmd_type == 0x01 and data_len >= 9 then -- ACK
+            data_tree:add(data_buf(0,1), "ret_code: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,4), "current_offset: " .. data_buf(1,4):le_uint())
+            data_tree:add(data_buf(5,4), "received_length: " .. data_buf(5,4):le_uint())
+        end
+    elseif cmd_id == 0x0402 then -- 固件传输结束
+        if cmd_type == 0x00 and data_len >= 2 then -- REQ
+            data_tree:add(data_buf(0,1), "checksum_type: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,1), "checksum_length: " .. data_buf(1,1):uint())
+            local remain = data_len - 2
+            if remain > 0 then
+                data_tree:add(data_buf(2,remain), "checksum_data")
+            end
+        elseif cmd_type == 0x01 and data_len >= 1 then -- ACK
+            local ret = data_buf(0,1):uint()
+            local ret_str = ret_code_map[ret] or "未知"
+            data_tree:add(data_buf(0,1), string.format("ret_code: 0x%02X (%s)", ret, ret_str))
+        end
+    elseif cmd_id == 0x0403 then -- 获取固件升级状态
+        if cmd_type == 0x01 and data_len >= 2 then -- ACK
+            data_tree:add(data_buf(0,1), "ret_code: " .. data_buf(0,1):uint())
+            data_tree:add(data_buf(1,1), "upgrade_progress: " .. data_buf(1,1):uint())
+        end
+    else
+        -- 未知cmd_id，原始显示
+        data_tree:add(data_buf, "Raw Data")
+    end
+end
+
 function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
+    -- 新增分流判断：控制指令优先，但端口为56200时仍走推送消息解析
+    if buffer:len() >= 1 and buffer(0,1):uint() == 0xAA then
+        if pinfo.dst_port ~= 56200 and pinfo.src_port ~= 56200 then
+            parse_control_cmd(buffer, pinfo, tree)
+            return
+        end
+    end
+    -- 原有推送消息解析逻辑
     pinfo.cols.protocol = "LivoxPushmsg"
     local subtree = tree:add(livox_pushmsg_proto, buffer(), "Livox Pushmsg Diag")
-
     print("Header:", tostring(buffer(0,28)))
-
     local index = 28
     while index < buffer:len() do
         if index + 4 > buffer:len() then break end
-
         local key = buffer(index, 2):le_uint()
         index = index + 2
         local length = buffer(index, 2):le_uint()
         index = index + 2
         if index + length > buffer:len() then break end
-
         local data_bytes = buffer(index, length)
         index = index + length
-
         if key == 0x0000 then
             -- 点云坐标格式
             local pcl_type_map = {[0x01]="直角坐标(32bits)", [0x02]="直角坐标(16bits)", [0x03]="球坐标"}
@@ -383,20 +781,8 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
                     local fault_id_str = string.format("%04X", fault_id)
 
                     -- 获取异常等级描述
-                    local level_desc = ""
-                    if fault_level == 0x01 then
-                        level_desc = "Info 消息"
-                    elseif fault_level == 0x02 then
-                        level_desc = "Warning 警告"
-                    elseif fault_level == 0x03 then
-                        level_desc = "Error 错误"
-                    elseif fault_level == 0x04 then
-                        level_desc = "Fatal 严重错误"
-                    else
-                        level_desc = "未知等级"
-                    end
-
-                    -- 获取异常描述
+                    local level_map = { [0x01] = "Info 消息", [0x02] = "Warning 警告", [0x03] = "Error 错误", [0x04] = "Fatal 严重错误" }
+                    local level_desc = level_map[fault_level] or "未知等级"
                     local fault_desc = fault_id_dict[fault_id_str] or string.format("未知故障ID (0x%04X)", fault_id)
 
                     -- 为每个故障码创建单独的子项，并指定对应的4字节范围
@@ -565,6 +951,7 @@ end
 local udp_port = DissectorTable.get("udp.port")
 udp_port:add(56200, livox_pushmsg_proto)
 udp_port:add(56000, livox_pushmsg_proto)
+udp_port:add(56100, livox_pushmsg_proto)
 
 ----------------------------------------------------------------------------------------------------------------
 --解析点云&IMU数据
@@ -709,4 +1096,6 @@ udp_port:add(56300, livox_data_proto)
 udp_port:add(56400, livox_data_proto)
 udp_port:add(57000, livox_data_proto)
 udp_port:add(58000, livox_data_proto)
+
+
 
