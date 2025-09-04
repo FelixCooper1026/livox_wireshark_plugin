@@ -10,9 +10,11 @@
 -- beta modify：将core_temp改为float
 -- 2025-06-03：修复端口号解析错误，应为小端序
 -- 2025-06-09：修复time_offset数据类型解析错误，应为 int64_t
--- 2025-06-23：增加 HAP 雷达解析支持
+-- 2025-06-23：增加对 HAP 雷达解析支持
 -- 2025-06-26：增加对点云及IMU数据的解析
--- 0025-07-17：增加对控制指令帧的解析
+-- 2025-07-17：增加对控制指令帧的解析
+-- 2025-08-05: 增加对 Avia 等（老工规雷达） IMU 数据解析
+-- 2025-09-04: 优化 HMS 诊断码错误描述
 -------------------------------------------------------------------------------
 
 
@@ -74,8 +76,8 @@ local fault_id_dict = {
     ["0000"] = "无故障",
     ["0102"] = "设备运行环境温度偏高;请检查环境温度，或排查散热措施",
     ["0103"] = "设备运行环境温度较高;请检查环境温度，或排查散热措施",
-    ["0104"] = "设备球形光窗存在脏污,设备点云数据可信度较差;请及时清洗擦拭设备的球形光窗",
-    ["0105"] = "设备升级过程中出现错误;请重新进行升级",
+    ["0104"] = "设备球形光窗存在脏污或附近有遮挡物，设备点云数据可信度较差;请及时清洗擦拭设备的球形光窗，或确保设备附近0.1m范围内无遮挡物",
+    ["0105"] = "设备固件升级过程中出现错误;请重新进行固件升级",
     ["0111"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
     ["0112"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
     ["0113"] = "设备内部IMU器件暂停工作;请重启设备恢复",
@@ -84,21 +86,21 @@ local fault_id_dict = {
     ["0116"] = "设备外部电压异常;请检查外部电压",
     ["0117"] = "设备参数异常;请尝试重启设备恢复",
     ["0201"] = "扫描模块低温加热中",
-    ["0210"] = "扫描模块异常",
-    ["0211"] = "扫描模块异常",
-    ["0212"] = "扫描模块异常",
-    ["0213"] = "扫描模块异常",
-    ["0214"] = "扫描模块异常",
-    ["0215"] = "扫描模块异常",
-    ["0216"] = "扫描模块异常",
-    ["0217"] = "扫描模块异常",
-    ["0218"] = "扫描模块异常",
-    ["0219"] = "扫描模块异常",
-    ["0401"] = "检测到以太网连接曾断开过，请检查以太网链路是否存在异常",
-    ["0402"] = "ptp同步中断，或者时间跳变太大，请排查ptp时钟源是否工作正常",
+    ["0210"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0211"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0212"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0213"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0214"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0215"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0216"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0217"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0218"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0219"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+    ["0401"] = "检测到以太网连接曾经断开过，现已恢复正常，请检查以太网链路是否存在异常",
+    ["0402"] = "PTP同步中断，或者时间跳变太大，请排查PTP时钟源是否工作正常",
     ["0403"] = "PTP版本为1588-V2.1版本，设备不支持该版本，请更换1588-V2.0版本进行同步",
     ["0404"] = "PPS同步异常，请检查PPS及GPS信号",
-    ["0405"] = "时间同步曾经发生过异常，请检查发生异常原因",
+    ["0405"] = "时间同步曾经发生过异常，现已恢复正常，请检查发生异常原因",
     ["0406"] = "时间同步精度低，请检查同步源",
     ["0407"] = "缺失GPS信号导致GPS同步失败，请检查GPS信号",
     ["0408"] = "缺失PPS信号导致GPS同步失败，请检查PPS信号",
@@ -198,8 +200,8 @@ local key_map = {
                 ["0000"] = "无故障",
                 ["0102"] = "设备运行环境温度偏高;请检查环境温度，或排查散热措施",
                 ["0103"] = "设备运行环境温度较高;请检查环境温度，或排查散热措施",
-                ["0104"] = "设备球形光窗存在脏污,设备点云数据可信度较差;请及时清洗擦拭设备的球形光窗",
-                ["0105"] = "设备升级过程中出现错误;请重新进行升级",
+                ["0104"] = "设备球形光窗存在脏污或附近有遮挡物，设备点云数据可信度较差;请及时清洗擦拭设备的球形光窗，或确保设备附近0.1m范围内无遮挡物",
+                ["0105"] = "设备固件升级过程中出现错误;请重新进行固件升级",
                 ["0111"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
                 ["0112"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
                 ["0113"] = "设备内部IMU器件暂停工作;请重启设备恢复",
@@ -208,21 +210,21 @@ local key_map = {
                 ["0116"] = "设备外部电压异常;请检查外部电压",
                 ["0117"] = "设备参数异常;请尝试重启设备恢复",
                 ["0201"] = "扫描模块低温加热中",
-                ["0210"] = "扫描模块异常",
-                ["0211"] = "扫描模块异常",
-                ["0212"] = "扫描模块异常",
-                ["0213"] = "扫描模块异常",
-                ["0214"] = "扫描模块异常",
-                ["0215"] = "扫描模块异常",
-                ["0216"] = "扫描模块异常",
-                ["0217"] = "扫描模块异常",
-                ["0218"] = "扫描模块异常",
-                ["0219"] = "扫描模块异常",
-                ["0401"] = "检测到以太网连接曾断开过，请检查以太网链路是否存在异常",
-                ["0402"] = "ptp同步中断，或者时间跳变太大，请排查ptp时钟源是否工作正常",
+                ["0210"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0211"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0212"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0213"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0214"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0215"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0216"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0217"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0218"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0219"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
+                ["0401"] = "检测到以太网连接曾经断开过，现已恢复正常，请检查以太网链路是否存在异常",
+                ["0402"] = "PTP同步中断，或者时间跳变太大，请排查PTP时钟源是否工作正常",
                 ["0403"] = "PTP版本为1588-V2.1版本，设备不支持该版本，请更换1588-V2.0版本进行同步",
                 ["0404"] = "PPS同步异常，请检查PPS及GPS信号",
-                ["0405"] = "时间同步曾经发生过异常，请检查发生异常原因",
+                ["0405"] = "时间同步曾经发生过异常，现已恢复正常，请检查发生异常原因",
                 ["0406"] = "时间同步精度低，请检查同步源",
                 ["0407"] = "缺失GPS信号导致GPS同步失败，请检查GPS信号",
                 ["0408"] = "缺失PPS信号导致GPS同步失败，请检查PPS信号",
@@ -255,7 +257,7 @@ local key_map = {
     },
 }
 
--- 优化后的key-value list解析函数
+-- Key-Value list解析函数
 local function parse_kv_list(buffer, offset, count, tree)
     for i=1,count do
         if offset+4 > buffer:len() then break end
@@ -719,8 +721,17 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
             local time_str = tostring(local_time_now)
             local time_num = tonumber(time_str)
             local local_time_ms = time_num / 1000000
-            local val = string.format("%.3f ms", local_time_ms)
-            subtree:add(f_local_time, data_bytes(0,8), val) 
+            local seconds_total = local_time_ms / 1000
+            
+            -- 分离秒和毫秒部分
+            local seconds_int = math.floor(seconds_total)
+            local milliseconds = math.floor((seconds_total - seconds_int) * 1000)
+            
+            -- 转换为日期字符串（包含毫秒）
+            local date_str = os.date("%Y-%m-%d %H:%M:%S", seconds_int) .. string.format(".%03d", milliseconds)
+            
+            local val = string.format("%.3f ms (%s)", local_time_ms, date_str)
+            subtree:add(f_local_time, data_bytes(0,8), val)
 
         elseif key == 0x800A then
             -- 上次同步时间
@@ -728,7 +739,16 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
             local time_str = tostring(last_sync_time)
             local time_num = tonumber(time_str)
             local last_sync_ms = time_num / 1000000
-            local val = string.format("%.3f ms", last_sync_ms)
+            local seconds_total = last_sync_ms / 1000
+            
+            -- 分离秒和毫秒部分
+            local seconds_int = math.floor(seconds_total)
+            local milliseconds = math.floor((seconds_total - seconds_int) * 1000)
+            
+            -- 转换为日期字符串（包含毫秒）
+            local date_str = os.date("%Y-%m-%d %H:%M:%S", seconds_int) .. string.format(".%03d", milliseconds)
+            
+            local val = string.format("%.3f ms (%s)", last_sync_ms, date_str)
             subtree:add(f_last_sync_time, data_bytes(0,8), val) 
 
         elseif key == 0x800B then
@@ -786,7 +806,7 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
                     local fault_desc = fault_id_dict[fault_id_str] or string.format("未知故障ID (0x%04X)", fault_id)
 
                     -- 为每个故障码创建单独的子项，并指定对应的4字节范围
-                    local fault_info = string.format("[%d]：0x%08X  异常等级[%s]\n异常描述: %s",
+                    local fault_info = string.format("[%d]：0x%08X  异常等级[%s]  异常描述: %s",
                         fault_count, code, level_desc, fault_desc)
                     subtree:add(f_hms_codes, data_bytes(i*4, 4), fault_info) 
                 end
@@ -956,6 +976,21 @@ udp_port:add(56100, livox_pushmsg_proto)
 ----------------------------------------------------------------------------------------------------------------
 --解析点云&IMU数据
 
+-- Livox Data协议的数据类型映射表
+local livox_data_type_map = {
+    [0] = "IMU数据",
+    [1] = "直角坐标32bit点云",
+    [2] = "直角坐标16bit点云", 
+    [3] = "球坐标点云"
+}
+
+-- Livox Data协议的时间戳类型映射表
+local livox_time_type_map = {
+    [0] = "无同步源，时间戳为雷达自上电以来经过的时间",
+    [1] = "gPTP/PTP同步，时间戳为master时钟源时间",
+    [2] = "GPS时间同步",
+}
+
 local livox_data_proto = Proto("LivoxData", "Livox Data")
 
 local f_version = ProtoField.uint8("livoxdata.version", "version")
@@ -1001,9 +1036,11 @@ function livox_data_proto.dissector(buffer, pinfo, tree)
     local frame_cnt_val = buffer(9,1):uint()
     subtree:add(f_frame_cnt, buffer(9,1), frame_cnt_val, string.format("frame_cnt (点云帧计数): %d", frame_cnt_val))
     local data_type = buffer(10,1):uint()
-    subtree:add(f_data_type, buffer(10,1), data_type, string.format("data_type (数据类型): %d", data_type))
+    local data_type_desc = livox_data_type_map[data_type] or string.format("未知数据类型 (0x%02X)", data_type)
+    subtree:add(f_data_type, buffer(10,1), data_type, string.format("data_type (数据类型): %d (%s)", data_type, data_type_desc))
     local time_type_val = buffer(11,1):uint()
-    subtree:add(f_time_type, buffer(11,1), time_type_val, string.format("time_type (时间戳类型): %d", time_type_val))
+    local time_type_desc = livox_time_type_map[time_type_val] or string.format("未知时间戳类型 (0x%02X)", time_type_val)
+    subtree:add(f_time_type, buffer(11,1), time_type_val, string.format("time_type (时间戳类型): %d (%s)", time_type_val, time_type_desc))
     subtree:add(f_reserved, buffer(12,12))
     local crc32_val = buffer(24,4):le_uint()
     subtree:add(f_crc32, buffer(24,4), crc32_val, string.format("crc32 (CRC32校验): 0x%08X", crc32_val))
@@ -1098,4 +1135,144 @@ udp_port:add(57000, livox_data_proto)
 udp_port:add(58000, livox_data_proto)
 
 
+local livox_old_data_proto = Proto("LivoxOldData", "Livox Old Product Data (Avia/Horizon/Tele-15/Mid-70/Mid-40)")
 
+-- 老产品数据协议字段定义
+local f_old_version = ProtoField.uint8("livoxold.version", "Version", base.DEC)
+local f_slot_id = ProtoField.uint8("livoxold.slot_id", "Slot ID", base.DEC)
+local f_lidar_id = ProtoField.uint8("livoxold.lidar_id", "LiDAR ID", base.DEC)
+local f_reserved = ProtoField.uint8("livoxold.reserved", "Reserved", base.HEX)
+local f_status_code = ProtoField.uint32("livoxold.status_code", "Status Code", base.HEX)
+local f_timestamp_type = ProtoField.uint8("livoxold.timestamp_type", "Timestamp Type", base.DEC)
+local f_data_type = ProtoField.uint8("livoxold.data_type", "Data Type", base.DEC)
+local f_timestamp = ProtoField.uint64("livoxold.timestamp", "Timestamp", base.DEC)
+local f_data = ProtoField.bytes("livoxold.data", "Data")
+local f_old_gyro_x = ProtoField.float("livoxold.gyro_x", "Gyro X", base.DEC)
+local f_old_gyro_y = ProtoField.float("livoxold.gyro_y", "Gyro Y", base.DEC)
+local f_old_gyro_z = ProtoField.float("livoxold.gyro_z", "Gyro Z", base.DEC)
+local f_old_acc_x = ProtoField.float("livoxold.acc_x", "Acc X", base.DEC)
+local f_old_acc_y = ProtoField.float("livoxold.acc_y", "Acc Y", base.DEC)
+local f_old_acc_z = ProtoField.float("livoxold.acc_z", "Acc Z", base.DEC)
+
+livox_old_data_proto.fields = {
+    f_old_version, f_slot_id, f_lidar_id, f_reserved,
+    f_status_code, f_timestamp_type, f_data_type, f_timestamp, f_data,
+    f_old_gyro_x, f_old_gyro_y, f_old_gyro_z, f_old_acc_x, f_old_acc_y, f_old_acc_z
+}
+
+-- LiDAR ID映射表
+local lidar_id_map = {
+    [1] = "Mid-100 左/Mid-40/Tele-15/Horizon/Mid-70/Avia",
+    [2] = "Mid-100 中",
+    [3] = "Mid-100 右"
+}
+
+-- 老产品数据协议的数据类型映射表
+local old_data_type_map = {
+    [0] = "单回波-直角坐标系-100点-100KHz (Mid-40)",
+    [1] = "单回波-球坐标系-100点-100KHz (Mid-40)",
+    [2] = "单回波-直角坐标系-96点 (Horizon/Tele-15/Avia:240KHz, Mid-70:100KHz)",
+    [3] = "单回波-球坐标系-96点 (Horizon/Tele-15/Avia:240KHz, Mid-70:100KHz)",
+    [4] = "双回波-直角坐标系-48点 (Horizon/Tele-15/Avia:480KHz, Mid-70:200KHz)",
+    [5] = "双回波-球坐标系-48点 (Horizon/Tele-15/Avia:480KHz, Mid-70:200KHz)",
+    [6] = "IMU数据 (Horizon/Tele-15/Avia)",
+    [7] = "三回波-直角坐标系-30点-720KHz (Avia)",
+    [8] = "三回波-球坐标系-30点-720KHz (Avia)"
+}
+
+-- 老产品数据协议的时间戳类型映射表
+local old_timestamp_type_map = {
+    [0] = "无同步源",
+    [1] = "PTP同步",
+    [2] = "保留",
+    [3] = "GPS同步",
+    [4] = "PPS同步 (仅雷达支持)"
+}
+
+
+-- 设备类型映射表
+local old_dev_type_map = {
+    [0x00] = "Livox Hub",
+    [0x01] = "Mid-40",
+    [0x02] = "Tele-15",
+    [0x03] = "Horizon",
+    [0x06] = "Mid-70",
+    [0x07] = "Avia"
+}
+
+
+
+function livox_old_data_proto.dissector(buffer, pinfo, tree)
+    pinfo.cols.protocol = "LivoxOldData"
+    local subtree = tree:add(livox_old_data_proto, buffer(), "Livox Old Product Data (Avia/Horizon/Tele-15/Mid-70/Mid-40)")
+
+    -- 检查最小长度
+    if buffer:len() < 18 then
+        subtree:add_expert_info(PI_MALFORMED, PI_ERROR, "数据包长度不足")
+        return
+    end
+
+    -- 解析头部字段
+    local version_val = buffer(0,1):uint()
+    subtree:add(f_old_version, buffer(0,1), version_val, string.format("Version (协议版本): %d", version_val))
+
+    local slot_id_val = buffer(1,1):uint()
+    subtree:add(f_slot_id, buffer(1,1), slot_id_val, string.format("Slot ID (端口号): %d", slot_id_val))
+
+    local lidar_id_val = buffer(2,1):uint()
+    local lidar_desc = lidar_id_map[lidar_id_val] or string.format("未知LiDAR ID (0x%02X)", lidar_id_val)
+    subtree:add(f_lidar_id, buffer(2,1), lidar_id_val, string.format("LiDAR ID: %d (%s)", lidar_id_val, lidar_desc))
+
+    local reserved_val = buffer(3,1):uint()
+    subtree:add(f_reserved, buffer(3,1), reserved_val, string.format("Reserved: 0x%02X", reserved_val))
+
+    local status_code_val = buffer(4,4):le_uint()
+    subtree:add(f_status_code, buffer(4,4), status_code_val, string.format("Status Code: 0x%08X", status_code_val))
+
+    local timestamp_type_val = buffer(8,1):uint()
+    local timestamp_type_desc = old_timestamp_type_map[timestamp_type_val] or string.format("未知时间戳类型 (0x%02X)", timestamp_type_val)
+    subtree:add(f_timestamp_type, buffer(8,1), timestamp_type_val, string.format("Timestamp Type: %d (%s)", timestamp_type_val, timestamp_type_desc))
+
+    local data_type_val = buffer(9,1):uint()
+    local data_type_desc = old_data_type_map[data_type_val] or string.format("未知数据类型 (0x%02X)", data_type_val)
+    subtree:add(f_data_type, buffer(9,1), data_type_val, string.format("Data Type: %d (%s)", data_type_val, data_type_desc))
+
+    local timestamp_val = buffer(10,8):le_uint64()
+    subtree:add(f_timestamp, buffer(10,8), timestamp_val, string.format("Timestamp: %s", tostring(timestamp_val)))
+
+    -- 解析数据部分
+    local data_offset = 18
+    if buffer:len() > data_offset then
+        local data_len = buffer:len() - data_offset
+        if data_len > 0 then
+            subtree:add(f_data, buffer(data_offset, data_len))
+        end
+
+        -- 解析IMU数据 (data_type = 6)
+        if data_type_val == 6 and data_len >= 24 then
+            local imu_tree = subtree:add(buffer(data_offset, 24), "IMU Data (数据类型6)")
+            
+            local gyro_x_val = buffer(data_offset+0,4):le_float()
+            imu_tree:add(f_old_gyro_x, buffer(data_offset+0,4), gyro_x_val, string.format("Gyro X (rad/s): %.10f", gyro_x_val))
+            
+            local gyro_y_val = buffer(data_offset+4,4):le_float()
+            imu_tree:add(f_old_gyro_y, buffer(data_offset+4,4), gyro_y_val, string.format("Gyro Y (rad/s): %.10f", gyro_y_val))
+            
+            local gyro_z_val = buffer(data_offset+8,4):le_float()
+            imu_tree:add(f_old_gyro_z, buffer(data_offset+8,4), gyro_z_val, string.format("Gyro Z (rad/s): %.10f", gyro_z_val))
+            
+            local acc_x_val = buffer(data_offset+12,4):le_float()
+            imu_tree:add(f_old_acc_x, buffer(data_offset+12,4), acc_x_val, string.format("Acc X (g): %.10f", acc_x_val))
+            
+            local acc_y_val = buffer(data_offset+16,4):le_float()
+            imu_tree:add(f_old_acc_y, buffer(data_offset+16,4), acc_y_val, string.format("Acc Y (g): %.10f", acc_y_val))
+            
+            local acc_z_val = buffer(data_offset+20,4):le_float()
+            imu_tree:add(f_old_acc_z, buffer(data_offset+20,4), acc_z_val, string.format("Acc Z (g): %.10f", acc_z_val))
+        end
+    end
+end
+
+-- 注册老产品数据协议到UDP端口60003
+udp_port:add(60001, livox_old_data_proto) -- 点云数据
+udp_port:add(60003, livox_old_data_proto) -- IMU数据
