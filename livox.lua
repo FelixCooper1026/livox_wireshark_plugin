@@ -13,8 +13,9 @@
 -- 2025-06-23：增加对 HAP 雷达解析支持
 -- 2025-06-26：增加对点云及IMU数据的解析
 -- 2025-07-17：增加对控制指令帧的解析
--- 2025-08-05: 增加对 Avia 等（老工规雷达） IMU 数据解析
+-- 2025-08-05: 增加对 Avia 等（老工规雷达）IMU 数据解析
 -- 2025-09-04: 优化 HMS 诊断码错误描述
+-- 2024-09-19：增加对 Avia 等（老工规雷达）控制指令帧解析
 -------------------------------------------------------------------------------
 
 
@@ -34,6 +35,7 @@ local f_detect_mode = ProtoField.string("livox.detect_mode", "探测模式", bas
 local f_func_io_cfg = ProtoField.string("livox.func_io_cfg", "功能线配置", base.UNICODE)
 local f_work_tgt_mode = ProtoField.string("livox.work_tgt_mode", "目标工作模式", base.UNICODE)
 local f_imu_data_en = ProtoField.string("livox.imu_data_en", "IMU数据输出", base.UNICODE)
+local f_rpm_mode = ProtoField.string("livox.rpm_mode", "电机转速模式", base.UNICODE)
 local f_sn = ProtoField.string("livox.sn", "SN号", base.UNICODE)
 local f_product_info = ProtoField.string("livox.product_info", "产品信息", base.UNICODE)
 local f_version_app = ProtoField.string("livox.version_app", "固件版本", base.UNICODE)
@@ -63,7 +65,7 @@ local f_cur_glass_heat_state = ProtoField.string("livox.cur_glass_heat_state", "
 livox_pushmsg_proto.fields = {
     f_pcl_type, f_pattern_mode, f_lidar_ip, f_target_push, f_target_pcl, f_target_imu, f_install_attitude,
     f_fov_cfg0, f_fov_cfg1, f_fov_en, f_detect_mode, f_func_io_cfg,
-    f_work_tgt_mode, f_imu_data_en, f_sn, f_product_info, f_version_app, f_mac,
+    f_work_tgt_mode, f_imu_data_en, f_rpm_mode, f_sn, f_product_info, f_version_app, f_mac,
     f_hms_codes, f_core_temp, f_powerup_count, f_local_time, f_last_sync_time,
     f_time_offset, f_time_sync_type, f_fw_type, f_error_code,
     f_loader_version, f_hw_version, f_work_status,
@@ -76,7 +78,7 @@ local fault_id_dict = {
     ["0000"] = "无故障",
     ["0102"] = "设备运行环境温度偏高;请检查环境温度，或排查散热措施",
     ["0103"] = "设备运行环境温度较高;请检查环境温度，或排查散热措施",
-    ["0104"] = "设备球形光窗存在脏污或附近有遮挡物，设备点云数据可信度较差;请及时清洗擦拭设备的球形光窗，或确保设备附近0.1m范围内无遮挡物",
+    ["0104"] = "设备球罩存在脏污或附近有遮挡物，请及时清洗擦拭设备球罩，或确保球罩0.1m范围内无遮挡物",
     ["0105"] = "设备固件升级过程中出现错误;请重新进行固件升级",
     ["0111"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
     ["0112"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
@@ -170,6 +172,7 @@ local key_map = {
     [0x0019] = {name="功能线配置", fmt=function(b) local s='' for i=0,b:len()-1 do s=s..tostring(b(i,1):uint()) if i<b:len()-1 then s=s..'.' end end return s end},
     [0x001A] = {name="目标工作模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x01]="采样",[0x02]="待机",[0x04]="错误",[0x05]="自检",[0x06]="电机启动",[0x08]="升级",[0x09]="就绪"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x001C] = {name="IMU数据输出", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="关闭",[0x01]="开启"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0021] = {name="电机转速模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="默认转速",[0x01]="低转速"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x8000] = {name="SN号", fmt=function(b) return b:stringz() end},
     [0x8001] = {name="产品信息", fmt=function(b) return b:stringz() end},
     [0x8002] = {name="固件版本", fmt=function(b) if b:len()>=4 then return string.format("%d.%d.%04d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint()*100+b(3,1):uint()) else return "" end end, len=4},
@@ -200,7 +203,7 @@ local key_map = {
                 ["0000"] = "无故障",
                 ["0102"] = "设备运行环境温度偏高;请检查环境温度，或排查散热措施",
                 ["0103"] = "设备运行环境温度较高;请检查环境温度，或排查散热措施",
-                ["0104"] = "设备球形光窗存在脏污或附近有遮挡物，设备点云数据可信度较差;请及时清洗擦拭设备的球形光窗，或确保设备附近0.1m范围内无遮挡物",
+                ["0104"] = "设备球罩存在脏污或附近有遮挡物，请及时清洗擦拭设备球罩，或确保球罩0.1m范围内无遮挡物",
                 ["0105"] = "设备固件升级过程中出现错误;请重新进行固件升级",
                 ["0111"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
                 ["0112"] = "设备内部器件温度异常;请检查环境温度，或排查散热措施",
@@ -636,6 +639,12 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
             local imu_data_en_map = {[0x00]="关闭", [0x01]="开启"}
             local val = imu_data_en_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
             subtree:add(f_imu_data_en, data_bytes(0,1), val) 
+
+        elseif key == 0x0021 then
+            -- 电机转速模式（0x00:默认转速，0x01:低转速）
+            local rpm_mode_map = {[0x00]="默认转速", [0x01]="低转速"}
+            local val = rpm_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_rpm_mode, data_bytes(0,1), val) 
 
         elseif key == 0x8000 then
             -- SN号
@@ -1154,10 +1163,102 @@ local f_old_acc_x = ProtoField.float("livoxold.acc_x", "Acc X", base.DEC)
 local f_old_acc_y = ProtoField.float("livoxold.acc_y", "Acc Y", base.DEC)
 local f_old_acc_z = ProtoField.float("livoxold.acc_z", "Acc Z", base.DEC)
 
+-- 控制指令帧字段定义
+local f_ctrl_sof = ProtoField.uint8("livoxoldctrl.sof", "Start of Frame", base.HEX)
+local f_ctrl_version = ProtoField.uint8("livoxoldctrl.version", "Protocol Version", base.DEC)
+local f_ctrl_length = ProtoField.uint16("livoxoldctrl.length", "Frame Length", base.DEC)
+local f_ctrl_cmd_type = ProtoField.uint8("livoxoldctrl.cmd_type", "Command Type", base.HEX)
+local f_ctrl_seq_num = ProtoField.uint16("livoxoldctrl.seq_num", "Sequence Number", base.DEC)
+local f_ctrl_crc16 = ProtoField.uint16("livoxoldctrl.crc16", "Header CRC-16", base.HEX)
+local f_ctrl_data = ProtoField.bytes("livoxoldctrl.data", "Data Field")
+local f_ctrl_crc32 = ProtoField.uint32("livoxoldctrl.crc32", "Frame CRC-32", base.HEX)
+
+-- 控制指令数据段字段定义
+local f_cmd_set = ProtoField.uint8("livoxoldctrl.cmd_set", "CMD Set", base.HEX)
+local f_cmd_id = ProtoField.uint8("livoxoldctrl.cmd_id", "CMD ID", base.HEX)
+local f_cmd_data = ProtoField.bytes("livoxoldctrl.cmd_data", "CMD Data")
+
+-- 配置参数字段定义
+local f_param_key = ProtoField.uint8("livoxctrl.param_key", "Parameter Key", base.HEX)
+local f_param_value = ProtoField.bytes("livoxctrl.param_value", "Parameter Value")
+local f_param_length = ProtoField.uint8("livoxctrl.param_length", "Parameter Length", base.DEC)
+
+-- 通用指令集字段定义
+
+-- 广播发现指令
+local f_broadcast_code = ProtoField.string("livoxoldctrl.broadcast_code", "Broadcast Code")
+local f_dev_type = ProtoField.uint8("livoxoldctrl.dev_type", "Device Type", base.HEX)
+local f_reserved_16 = ProtoField.uint16("livoxoldctrl.reserved_16", "Reserved", base.HEX)
+
+-- 网络握手确认指令
+local f_user_ip = ProtoField.ipv4("livoxoldctrl.user_ip", "User IP")
+local f_data_port = ProtoField.uint16("livoxoldctrl.data_port", "Data Port", base.DEC)
+local f_cmd_port = ProtoField.uint16("livoxoldctrl.cmd_port", "Command Port", base.DEC)
+local f_imu_port = ProtoField.uint16("livoxoldctrl.imu_port", "IMU Port", base.DEC)
+
+-- 查询设备信息指令
+local f_ret_code = ProtoField.uint8("livoxoldctrl.ret_code", "Return Code", base.HEX)
+local f_firmware_version = ProtoField.string("livoxoldctrl.firmware_version", "Firmware Version")
+
+-- 心跳数据指令
+local f_work_state = ProtoField.uint8("livoxoldctrl.work_state", "Work State", base.HEX)
+local f_feature_msg = ProtoField.uint8("livoxoldctrl.feature_msg", "Feature Message", base.HEX)
+local f_ack_msg = ProtoField.uint32("livoxoldctrl.ack_msg", "ACK Message", base.HEX)
+
+-- 开始/停止采样指令
+local f_sample_ctrl = ProtoField.uint8("livoxoldctrl.sample_ctrl", "Sample Control", base.HEX)
+
+-- 更改点云坐标系模式
+local f_coordinate_type = ProtoField.uint8("livoxoldctrl.coordinate_type", "Coordinate Type", base.HEX)
+
+-- 异常状态信息
+local f_status_code = ProtoField.uint32("livoxoldctrl.old_status_code", "Status Code", base.HEX)
+
+local f_ip_mode = ProtoField.uint8("livoxoldctrl.ip_mode", "IP Mode", base.HEX)
+local f_ip_addr = ProtoField.ipv4("livoxoldctrl.ip_addr", "IP Address")
+local f_net_mask = ProtoField.ipv4("livoxoldctrl.net_mask", "Net Mask")
+local f_gw_addr = ProtoField.ipv4("livoxoldctrl.gw_addr", "Gateway Address")
+local f_timeout = ProtoField.uint16("livoxoldctrl.timeout", "Timeout", base.DEC)
+
+
+-- 雷达指令集字段定义
+
+-- 模式切换指令
+local f_lidar_mode = ProtoField.uint8("livoxoldctrl.lidar_mode", "LiDAR Mode", base.HEX)
+
+-- 外参配置指令
+local f_roll = ProtoField.float("livoxoldctrl.roll", "Roll", base.DEC)
+local f_pitch = ProtoField.float("livoxoldctrl.pitch", "Pitch", base.DEC)
+local f_yaw = ProtoField.float("livoxoldctrl.yaw", "Yaw", base.DEC)
+local f_x = ProtoField.int32("livoxoldctrl.x", "X Translation", base.DEC)
+local f_y = ProtoField.int32("livoxoldctrl.y", "Y Translation", base.DEC)
+local f_z = ProtoField.int32("livoxoldctrl.z", "Z Translation", base.DEC)
+
+local f_state = ProtoField.uint8("livoxoldctrl.state", "State", base.HEX)
+local f_mode = ProtoField.uint8("livoxoldctrl.mode", "Mode", base.HEX)
+local f_frequency = ProtoField.uint8("livoxoldctrl.frequency", "Frequency", base.HEX)
+local f_year = ProtoField.uint8("livoxoldctrl.year", "Year", base.DEC)
+local f_month = ProtoField.uint8("livoxoldctrl.month", "Month", base.DEC)
+local f_day = ProtoField.uint8("livoxoldctrl.day", "Day", base.DEC)
+local f_hour = ProtoField.uint8("livoxoldctrl.hour", "Hour", base.DEC)
+local f_microsecond = ProtoField.uint32("livoxoldctrl.microsecond", "Microsecond", base.DEC)
+
+
+
 livox_old_data_proto.fields = {
     f_old_version, f_slot_id, f_lidar_id, f_reserved,
     f_status_code, f_timestamp_type, f_data_type, f_timestamp, f_data,
-    f_old_gyro_x, f_old_gyro_y, f_old_gyro_z, f_old_acc_x, f_old_acc_y, f_old_acc_z
+    f_old_gyro_x, f_old_gyro_y, f_old_gyro_z, f_old_acc_x, f_old_acc_y, f_old_acc_z,
+    f_ctrl_sof, f_ctrl_version, f_ctrl_length, f_ctrl_cmd_type, f_ctrl_seq_num,
+    f_ctrl_crc16, f_ctrl_data, f_ctrl_crc32,
+    f_cmd_set, f_cmd_id, f_cmd_data,
+    f_broadcast_code, f_dev_type, f_reserved_16,
+    f_user_ip, f_data_port, f_cmd_port, f_imu_port,
+    f_ret_code, f_firmware_version, f_work_state, f_feature_msg, f_ack_msg, 
+    f_sample_ctrl, f_coordinate_type, f_old_status_code, f_ip_mode, f_ip_addr, 
+    f_net_mask, f_gw_addr, f_timeout, f_lidar_mode, f_roll, f_pitch, f_yaw, f_x, f_y, f_z,
+    f_state, f_mode, f_frequency, f_year, f_month, f_day, f_hour, f_microsecond,
+    f_param_key, f_param_value, f_param_length
 }
 
 -- LiDAR ID映射表
@@ -1189,7 +1290,6 @@ local old_timestamp_type_map = {
     [4] = "PPS同步 (仅雷达支持)"
 }
 
-
 -- 设备类型映射表
 local old_dev_type_map = {
     [0x00] = "Livox Hub",
@@ -1200,9 +1300,1191 @@ local old_dev_type_map = {
     [0x07] = "Avia"
 }
 
+-- 控制指令命令类型映射表
+local ctrl_cmd_type_map = {
+    [0x00] = "CMD (命令)",
+    [0x01] = "ACK (应答)",
+    [0x02] = "MSG (消息)"
+}
+
+-- CMD Set 映射表
+local cmd_set_map = {
+    [0x00] = "通用指令集",
+    [0x01] = "雷达指令集",
+    [0x02] = "保留指令集"
+}
+
+-- 配置参数键值映射表
+local param_key_map = {
+    [0x00] = "保留",
+    [0x01] = "高灵敏度功能 (Tele-15/07.09.0000+, Avia/11.06.0000+)",
+    [0x02] = "重复/非重复扫描模式 (Avia/11.06.0000+)",
+    [0x03] = "slot id配置 (Mid-70/10.03.0000+, Avia/11.06.0000+)"
+}
+
+-- 高灵敏度功能参数值映射表
+local high_sensitivity_map = {
+    [0x00] = "高灵敏度功能关闭",
+    [0x01] = "高灵敏度功能开启(默认)"
+}
+
+-- 扫描模式参数值映射表
+local scan_mode_map = {
+    [0x00] = "非重复扫描模式(默认)",
+    [0x01] = "重复扫描模式"
+}
+-- 通用指令集 (CMD Set 0x00) 映射表
+local general_cmd_map = {
+    [0x00] = "广播信息",
+    [0x01] = "网络握手确认指令",
+    [0x02] = "查询设备信息",
+    [0x03] = "心跳指令",
+    [0x04] = "开始/停止采样",
+    [0x05] = "更改点云坐标模式",
+    [0x06] = "断开连接指令",
+    [0x07] = "设备异常推送",
+    [0x08] = "设置静态/动态IP模式",
+    [0x09] = "读取设备的IP模式",
+    [0x0A] = "重启设备",
+    [0x0B] = "设置设备配置参数",
+    [0x0C] = "读取设备配置参数"
+}
+
+-- 返回码映射表
+local ret_code_map = {
+    [0x00] = "成功",
+    [0x01] = "失败"
+}
+
+-- 工作状态映射表
+local work_state_map = {
+    [0x00] = "初始化",
+    [0x01] = "正常",
+    [0x02] = "低功耗",
+    [0x03] = "待机",
+    [0x04] = "异常"
+}
+
+-- 采样控制映射表
+local sample_ctrl_map = {
+    [0x00] = "停止采样",
+    [0x01] = "开始采样"
+}
+
+-- 坐标系类型映射表
+local coordinate_type_map = {
+    [0x00] = "直角坐标系",
+    [0x01] = "球坐标系"
+}
+
+-- IP模式映射表
+local ip_mode_map = {
+    [0x00] = "动态IP",
+    [0x01] = "静态IP"
+}
 
 
-function livox_old_data_proto.dissector(buffer, pinfo, tree)
+
+-- 雷达指令集 (CMD Set 0x01) 映射表
+local lidar_cmd_map = {
+    [0x00] = "设置模式指令",
+    [0x01] = "设置雷达外部参数",
+    [0x02] = "读取雷达外部参数",
+    [0x03] = "开启/关闭抗雨雾功能",
+    [0x04] = "设置开启/关闭风扇",
+    [0x05] = "获取风扇开/关状态",
+    [0x06] = "设置点云回波模式",
+    [0x07] = "读取点云回波模式",
+    [0x08] = "设置IMU数据推送频率",
+    [0x09] = "读取IMU推送频率",
+    [0x0A] = "更新UTC同步时间"
+}
+
+
+-- 雷达模式映射表
+local lidar_mode_map = {
+    [0x01] = "正常工作模式",
+    [0x02] = "低功耗模式", 
+    [0x03] = "待机模式"
+}
+
+-- 雷达指令集返回码映射表（扩展）
+local lidar_ret_code_map = {
+    [0x00] = "成功",
+    [0x01] = "失败",
+    [0x02] = "正在切换"
+}
+
+-- 状态映射表
+local state_map = {
+    [0x00] = "关闭",
+    [0x01] = "开启"
+}
+
+-- 回波模式映射表
+local echo_mode_map = {
+    [0x00] = "第一回波 Single Return First",
+    [0x01] = "最强回波 Single Return Strongest", 
+    [0x02] = "双回波 Dual Return",
+    [0x03] = "三回波 Triple Return"
+}
+
+-- IMU频率映射表
+local imu_frequency_map = {
+    [0x00] = "0Hz (关闭IMU数据推送)",
+    [0x01] = "200Hz"
+}
+
+-- 解析控制指令数据段
+local function dissect_control_data(buffer, subtree, cmd_type_val)
+    local data_length = buffer:len()
+    if data_length < 2 then
+        subtree:add_expert_info(PI_MALFORMED, PI_WARN, "数据段长度不足")
+        return
+    end
+    
+    -- 解析CMD Set
+    local cmd_set_val = buffer(0,1):uint()
+    local cmd_set_desc = cmd_set_map[cmd_set_val] or string.format("未知CMD Set (0x%02X)", cmd_set_val)
+    subtree:add(f_cmd_set, buffer(0,1), cmd_set_val, string.format("CMD Set: 0x%02X (%s)", cmd_set_val, cmd_set_desc))
+    
+    -- 解析CMD ID
+    local cmd_id_val = buffer(1,1):uint()
+    local cmd_desc = "未知命令"
+    
+    if cmd_set_val == 0x00 then
+        cmd_desc = general_cmd_map[cmd_id_val] or string.format("未知通用命令 (0x%02X)", cmd_id_val)
+    elseif cmd_set_val == 0x01 then
+        cmd_desc = lidar_cmd_map[cmd_id_val] or string.format("未知雷达命令 (0x%02X)", cmd_id_val)
+    else
+        cmd_desc = string.format("未知指令集命令 (0x%02X)", cmd_id_val)
+    end
+    
+    subtree:add(f_cmd_id, buffer(1,1), cmd_id_val, string.format("CMD ID: 0x%02X (%s)", cmd_id_val, cmd_desc))
+    
+    -- 解析特定命令的数据内容
+    if data_length > 2 then
+        local cmd_data_buffer = buffer(2, data_length - 2)
+        local cmd_data_subtree = subtree:add(f_cmd_data, cmd_data_buffer, string.format("CMD Data (%d bytes)", data_length - 2))
+
+    -- 0x00通用指令集    
+        -- 广播消息 (CMD Set 0x00, CMD ID 0x00)
+        if cmd_set_val == 0x00 and cmd_id_val == 0x00 then
+            if data_length >= 21 then
+                local broadcast_code = buffer(2,16):string()
+                cmd_data_subtree:add(f_broadcast_code, buffer(2,16), broadcast_code, string.format("Broadcast Code: %s", broadcast_code))
+                
+                local dev_type_val = buffer(18,1):uint()
+                local dev_type_desc = old_dev_type_map[dev_type_val] or string.format("未知设备类型 (0x%02X)", dev_type_val)
+                cmd_data_subtree:add(f_dev_type, buffer(18,1), dev_type_val, string.format("Device Type: 0x%02X (%s)", dev_type_val, dev_type_desc))
+                
+                local reserved_val = buffer(19,2):le_uint()
+                cmd_data_subtree:add(f_reserved_16, buffer(19,2), reserved_val, string.format("Reserved: 0x%04X", reserved_val))
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "广播消息长度不足")
+            end
+
+        -- 网络握手确认请求 (CMD Set 0x00, CMD ID 0x01, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x01 and cmd_type_val == 0x00 then
+            if data_length >= 12 then
+                -- 解析IP地址 (4字节)
+                local ip_bytes = buffer(2,4):bytes()
+                local ip_str = string.format("%d.%d.%d.%d", ip_bytes:get_index(0), ip_bytes:get_index(1), ip_bytes:get_index(2), ip_bytes:get_index(3))
+                cmd_data_subtree:add(f_user_ip, buffer(2,4))  -- 只传递字段对象和缓冲区范围
+                
+                -- 解析数据端口
+                local data_port_val = buffer(6,2):le_uint()
+                cmd_data_subtree:add(f_data_port, buffer(6,2), data_port_val)
+                
+                -- 解析命令端口
+                local cmd_port_val = buffer(8,2):le_uint()
+                cmd_data_subtree:add(f_cmd_port, buffer(8,2), cmd_port_val)
+                
+                -- 解析IMU端口
+                local imu_port_val = buffer(10,2):le_uint()
+                cmd_data_subtree:add(f_imu_port, buffer(10,2), imu_port_val)
+                
+                -- 添加描述信息作为单独的文本项
+                cmd_data_subtree:add("User IP: " .. ip_str)
+                cmd_data_subtree:add("Data Port: " .. data_port_val)
+                cmd_data_subtree:add("Command Port: " .. cmd_port_val)
+                cmd_data_subtree:add("IMU Port: " .. imu_port_val)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "网络握手确认请求长度不足")
+            end
+        
+        -- 网络握手确认应答 (CMD Set 0x00, CMD ID 0x01, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x01 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val, string.format("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc))
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "网络握手确认应答长度不足")
+            end
+        
+        -- 设备信息查询应答 (CMD Set 0x00, CMD ID 0x02, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x02 and cmd_type_val == 0x01 then
+            if data_length >= 7 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val, string.format("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc))
+                
+                -- 解析固件版本 (4字节)
+                local version_parts = {}
+                for i = 0, 3 do
+                    version_parts[i+1] = buffer(3+i,1):uint()
+                end
+                local version_str = string.format("%d.%d.%d.%d", version_parts[1], version_parts[2], version_parts[3], version_parts[4])
+                cmd_data_subtree:add(f_firmware_version, buffer(3,4), version_str, string.format("Firmware Version: %s", version_str))
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "设备信息查询应答长度不足")
+            end
+        
+        -- 心跳应答 (CMD Set 0x00, CMD ID 0x03, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x03 and cmd_type_val == 0x01 then
+            if data_length >= 9 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+                
+                local work_state_val = buffer(3,1):uint()
+                local work_state_desc = work_state_map[work_state_val] or string.format("未知工作状态 (0x%02X)", work_state_val)
+                cmd_data_subtree:add(f_work_state, buffer(3,1), work_state_val)
+                cmd_data_subtree:add("Work State: 0x%02X (%s)", work_state_val, work_state_desc)
+                
+                local feature_msg_val = buffer(4,1):uint()
+                local rain_fog_status = (feature_msg_val & 0x01) > 0 and "开启" or "关闭"
+                cmd_data_subtree:add(f_feature_msg, buffer(4,1), feature_msg_val)
+                cmd_data_subtree:add("Feature Message: 0x%02X (抗雨雾: %s)", feature_msg_val, rain_fog_status)
+                
+                local ack_msg_val = buffer(5,4):le_uint()
+                cmd_data_subtree:add(f_ack_msg, buffer(5,4), ack_msg_val)
+                
+                -- 根据工作状态解析ACK信息
+                if work_state_val == 0x00 then
+                    -- 初始化状态：显示初始化百分比
+                    local init_percentage = ack_msg_val
+                    cmd_data_subtree:add("ACK Message: %d%% (初始化百分比)", init_percentage)
+                else
+                    -- 其他状态：按照异常状态码解析
+                    cmd_data_subtree:add("ACK Message: 0x%08X", ack_msg_val)
+                    
+                    -- 详细解析状态码（类似于异常状态推送信息的解析）
+                    local status_details = {}
+                    
+                    -- 温度状态 (Bit0-1)
+                    local temp_status = (ack_msg_val >> 0) & 0x3
+                    if temp_status == 0 then
+                        table.insert(status_details, "温度正常")
+                    elseif temp_status == 1 then
+                        table.insert(status_details, "温度偏高或偏低")
+                    elseif temp_status == 2 then
+                        table.insert(status_details, "温度极高或极低")
+                    end
+                    
+                    -- 电压状态 (Bit2-3)
+                    local volt_status = (ack_msg_val >> 2) & 0x3
+                    if volt_status == 0 then
+                        table.insert(status_details, "电压正常")
+                    elseif volt_status == 1 then
+                        table.insert(status_details, "电压偏高")
+                    elseif volt_status == 2 then
+                        table.insert(status_details, "电压极高")
+                    end
+                    
+                    -- 电机状态 (Bit4-5)
+                    local motor_status = (ack_msg_val >> 4) & 0x3
+                    if motor_status == 0 then
+                        table.insert(status_details, "电机正常")
+                    elseif motor_status == 1 then
+                        table.insert(status_details, "电机警告")
+                    elseif motor_status == 2 then
+                        table.insert(status_details, "电机错误，无法工作")
+                    end
+                    
+                    -- 脏污警告 (Bit6-7)
+                    local dirty_warn = (ack_msg_val >> 6) & 0x3
+                    if dirty_warn == 0 then
+                        table.insert(status_details, "无脏污和遮挡")
+                    elseif dirty_warn >= 1 then
+                        table.insert(status_details, "有脏污和遮挡")
+                    end
+                    
+                    -- 固件状态 (Bit8)
+                    local firmware_status = (ack_msg_val >> 8) & 0x1
+                    if firmware_status == 0 then
+                        table.insert(status_details, "固件正常")
+                    else
+                        table.insert(status_details, "固件出错，需要升级")
+                    end
+                    
+                    -- PPS状态 (Bit9)
+                    local pps_status = (ack_msg_val >> 9) & 0x1
+                    if pps_status == 0 then
+                        table.insert(status_details, "无PPS信号")
+                    else
+                        table.insert(status_details, "PPS信号正常")
+                    end
+                    
+                    -- 设备状态 (Bit10)
+                    local device_status = (ack_msg_val >> 10) & 0x1
+                    if device_status == 0 then
+                        table.insert(status_details, "设备正常")
+                    else
+                        table.insert(status_details, "设备寿命警告")
+                    end
+                    
+                    -- 风扇状态 (Bit11)
+                    local fan_status = (ack_msg_val >> 11) & 0x1
+                    if fan_status == 0 then
+                        table.insert(status_details, "风扇正常")
+                    else
+                        table.insert(status_details, "风扇警告（异常或用户设置停止）")
+                    end
+                    
+                    -- 自加热状态 (Bit12)
+                    local self_heating = (ack_msg_val >> 12) & 0x1
+                    if self_heating == 0 then
+                        table.insert(status_details, "低温自加热关闭")
+                    else
+                        table.insert(status_details, "低温自加热开启")
+                    end
+                    
+                    -- PTP状态 (Bit13)
+                    local ptp_status = (ack_msg_val >> 13) & 0x1
+                    if ptp_status == 0 then
+                        table.insert(status_details, "无1588信号")
+                    else
+                        table.insert(status_details, "1588信号正常")
+                    end
+                    
+                    -- 时间同步状态 (Bit14-16)
+                    local time_sync_status = (ack_msg_val >> 14) & 0x7
+                    if time_sync_status == 0 then
+                        table.insert(status_details, "未开始时间同步")
+                    elseif time_sync_status == 1 then
+                        table.insert(status_details, "使用PTP 1588同步")
+                    elseif time_sync_status == 2 then
+                        table.insert(status_details, "使用GPS同步")
+                    elseif time_sync_status == 3 then
+                        table.insert(status_details, "使用PPS同步")
+                    elseif time_sync_status == 4 then
+                        table.insert(status_details, "系统时间同步异常（最高优先级信号异常）")
+                    end
+                    
+                    -- 系统状态 (Bit30-31)
+                    local system_status = (ack_msg_val >> 30) & 0x3
+                    if system_status == 0 then
+                        table.insert(status_details, "系统正常")
+                    elseif system_status == 1 then
+                        table.insert(status_details, "系统警告")
+                    elseif system_status == 2 then
+                        table.insert(status_details, "系统错误，雷达停机")
+                    end
+                    
+                    -- 显示详细状态信息
+                    if #status_details > 0 then
+                        local status_tree = cmd_data_subtree:add("Status Details")
+                        for i, detail in ipairs(status_details) do
+                            status_tree:add("[" .. i .. "] " .. detail)
+                        end
+                    end
+                end
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "心跳应答长度不足")
+            end
+        
+        -- 开始/停止采样请求 (CMD Set 0x00, CMD ID 0x04, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x04 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local sample_ctrl_val = buffer(2,1):uint()
+                local sample_ctrl_desc = sample_ctrl_map[sample_ctrl_val] or string.format("未知采样控制 (0x%02X)", sample_ctrl_val)
+                cmd_data_subtree:add(f_sample_ctrl, buffer(2,1), sample_ctrl_val, string.format("Sample Control: 0x%02X (%s)", sample_ctrl_val, sample_ctrl_desc))
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "开始/停止采样请求长度不足")
+            end
+        
+        -- 开始/停止采样应答 (CMD Set 0x00, CMD ID 0x04, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x04 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val, string.format("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc))
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "开始/停止采样应答长度不足")
+            end
+        
+        -- 更改坐标系请求 (CMD Set 0x00, CMD ID 0x05, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x05 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local coordinate_type_val = buffer(2,1):uint()
+                local coordinate_type_desc = coordinate_type_map[coordinate_type_val] or string.format("未知坐标系类型 (0x%02X)", coordinate_type_val)
+                cmd_data_subtree:add(f_coordinate_type, buffer(2,1), coordinate_type_val, string.format("Coordinate Type: 0x%02X (%s)", coordinate_type_val, coordinate_type_desc))
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "更改坐标系请求长度不足")
+            end
+        
+        -- 更改坐标系应答 (CMD Set 0x00, CMD ID 0x05, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x05 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val, string.format("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc))
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "更改坐标系应答长度不足")
+            end
+
+        -- 断开连接请求 (CMD Set 0x00, CMD ID 0x06, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x06 and cmd_type_val == 0x00 then
+            -- 断开连接请求没有额外数据字段
+            if data_length > 2 then
+                cmd_data_subtree:add("No additional data expected for disconnect request")
+            end
+
+        -- 断开连接应答 (CMD Set 0x00, CMD ID 0x06, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x06 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "断开连接应答长度不足")
+            end
+
+        -- 异常状态推送信息 (CMD Set 0x00, CMD ID 0x07, 且为MSG类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x07 and cmd_type_val == 0x02 then
+            if data_length >= 6 then
+                local status_code_val = buffer(2,4):le_uint()
+                cmd_data_subtree:add(f_ctrl_status_code, buffer(2,4), status_code_val)
+                cmd_data_subtree:add("Status Code: 0x%08X", status_code_val)
+                
+                -- 详细解析状态码
+                local status_details = {}
+                
+                -- 温度状态 (Bit0-1)
+                local temp_status = (status_code_val >> 0) & 0x3
+                if temp_status == 0 then
+                    table.insert(status_details, "温度正常")
+                elseif temp_status == 1 then
+                    table.insert(status_details, "温度偏高或偏低")
+                elseif temp_status == 2 then
+                    table.insert(status_details, "温度极高或极低")
+                end
+                
+                -- 电压状态 (Bit2-3)
+                local volt_status = (status_code_val >> 2) & 0x3
+                if volt_status == 0 then
+                    table.insert(status_details, "电压正常")
+                elseif volt_status == 1 then
+                    table.insert(status_details, "电压偏高")
+                elseif volt_status == 2 then
+                    table.insert(status_details, "电压极高")
+                end
+                
+                -- 电机状态 (Bit4-5)
+                local motor_status = (status_code_val >> 4) & 0x3
+                if motor_status == 0 then
+                    table.insert(status_details, "电机正常")
+                elseif motor_status == 1 then
+                    table.insert(status_details, "电机警告")
+                elseif motor_status == 2 then
+                    table.insert(status_details, "电机错误，无法工作")
+                end
+                
+                -- 脏污警告 (Bit6-7)
+                local dirty_warn = (status_code_val >> 6) & 0x3
+                if dirty_warn == 0 then
+                    table.insert(status_details, "无脏污和遮挡")
+                elseif dirty_warn >= 1 then
+                    table.insert(status_details, "有脏污和遮挡")
+                end
+                
+                -- 固件状态 (Bit8)
+                local firmware_status = (status_code_val >> 8) & 0x1
+                if firmware_status == 0 then
+                    table.insert(status_details, "固件正常")
+                else
+                    table.insert(status_details, "固件出错，需要升级")
+                end
+                
+                -- PPS状态 (Bit9)
+                local pps_status = (status_code_val >> 9) & 0x1
+                if pps_status == 0 then
+                    table.insert(status_details, "无PPS信号")
+                else
+                    table.insert(status_details, "PPS信号正常")
+                end
+                
+                -- 设备状态 (Bit10)
+                local device_status = (status_code_val >> 10) & 0x1
+                if device_status == 0 then
+                    table.insert(status_details, "设备正常")
+                else
+                    table.insert(status_details, "设备寿命警告")
+                end
+                
+                -- 风扇状态 (Bit11)
+                local fan_status = (status_code_val >> 11) & 0x1
+                if fan_status == 0 then
+                    table.insert(status_details, "风扇正常")
+                else
+                    table.insert(status_details, "风扇警告（异常或用户设置停止）")
+                end
+                
+                -- 自加热状态 (Bit12)
+                local self_heating = (status_code_val >> 12) & 0x1
+                if self_heating == 0 then
+                    table.insert(status_details, "低温自加热关闭")
+                else
+                    table.insert(status_details, "低温自加热开启")
+                end
+                
+                -- PTP状态 (Bit13)
+                local ptp_status = (status_code_val >> 13) & 0x1
+                if ptp_status == 0 then
+                    table.insert(status_details, "无1588信号")
+                else
+                    table.insert(status_details, "1588信号正常")
+                end
+                
+                -- 时间同步状态 (Bit14-16)
+                local time_sync_status = (status_code_val >> 14) & 0x7
+                if time_sync_status == 0 then
+                    table.insert(status_details, "未开始时间同步")
+                elseif time_sync_status == 1 then
+                    table.insert(status_details, "使用PTP 1588同步")
+                elseif time_sync_status == 2 then
+                    table.insert(status_details, "使用GPS同步")
+                elseif time_sync_status == 3 then
+                    table.insert(status_details, "使用PPS同步")
+                elseif time_sync_status == 4 then
+                    table.insert(status_details, "系统时间同步异常")
+                end
+                
+                -- 系统状态 (Bit30-31)
+                local system_status = (status_code_val >> 30) & 0x3
+                if system_status == 0 then
+                    table.insert(status_details, "系统正常")
+                elseif system_status == 1 then
+                    table.insert(status_details, "系统警告")
+                elseif system_status == 2 then
+                    table.insert(status_details, "系统错误，雷达停机")
+                end
+                
+                -- 显示详细状态信息
+                if #status_details > 0 then
+                    local status_tree = cmd_data_subtree:add("Status Details")
+                    for i, detail in ipairs(status_details) do
+                        status_tree:add(detail)
+                    end
+                end
+                
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "异常状态推送信息长度不足")
+            end
+
+        -- 配置IP请求 (CMD Set 0x00, CMD ID 0x08, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x08 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local ip_mode_val = buffer(2,1):uint()
+                local ip_mode_desc = ip_mode_map[ip_mode_val] or string.format("未知IP模式 (0x%02X)", ip_mode_val)
+                cmd_data_subtree:add(f_ip_mode, buffer(2,1), ip_mode_val)
+                cmd_data_subtree:add("IP Mode: 0x%02X (%s)", ip_mode_val, ip_mode_desc)
+                
+                -- 解析IP地址
+                if data_length >= 7 then
+                    local ip_bytes = buffer(3,4):bytes()
+                    local ip_str = string.format("%d.%d.%d.%d", ip_bytes:get_index(0), ip_bytes:get_index(1), ip_bytes:get_index(2), ip_bytes:get_index(3))
+                    cmd_data_subtree:add(f_ip_addr, buffer(3,4))
+                    cmd_data_subtree:add("IP Address: %s", ip_str)
+                end
+                
+                -- 解析子网掩码（静态IP模式下有效）
+                if data_length >= 11 and ip_mode_val == 0x01 then
+                    local netmask_bytes = buffer(7,4):bytes()
+                    local netmask_str = string.format("%d.%d.%d.%d", netmask_bytes:get_index(0), netmask_bytes:get_index(1), netmask_bytes:get_index(2), netmask_bytes:get_index(3))
+                    cmd_data_subtree:add(f_net_mask, buffer(7,4))
+                    cmd_data_subtree:add("Net Mask: %s", netmask_str)
+                end
+                
+                -- 解析网关地址（静态IP模式下有效）
+                if data_length >= 15 and ip_mode_val == 0x01 then
+                    local gw_bytes = buffer(11,4):bytes()
+                    local gw_str = string.format("%d.%d.%d.%d", gw_bytes:get_index(0), gw_bytes:get_index(1), gw_bytes:get_index(2), gw_bytes:get_index(3))
+                    cmd_data_subtree:add(f_gw_addr, buffer(11,4))
+                    cmd_data_subtree:add("Gateway: %s", gw_str)
+                end
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "配置IP请求长度不足")
+            end
+
+        -- 配置IP应答 (CMD Set 0x00, CMD ID 0x08, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x08 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "配置IP应答长度不足")
+            end
+
+        -- 获取IP信息请求 (CMD Set 0x00, CMD ID 0x09, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x09 and cmd_type_val == 0x00 then
+            -- 获取IP信息请求没有额外数据字段
+            if data_length > 2 then
+                cmd_data_subtree:add("No additional data expected for get IP info request")
+            end
+
+        -- 获取IP信息应答 (CMD Set 0x00, CMD ID 0x09, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x09 and cmd_type_val == 0x01 then
+            if data_length >= 16 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+                
+                local ip_mode_val = buffer(3,1):uint()
+                local ip_mode_desc = ip_mode_map[ip_mode_val] or string.format("未知IP模式 (0x%02X)", ip_mode_val)
+                cmd_data_subtree:add(f_ip_mode, buffer(3,1), ip_mode_val)
+                cmd_data_subtree:add("IP Mode: 0x%02X (%s)", ip_mode_val, ip_mode_desc)
+                
+                -- 解析IP地址
+                local ip_bytes = buffer(4,4):bytes()
+                local ip_str = string.format("%d.%d.%d.%d", ip_bytes:get_index(0), ip_bytes:get_index(1), ip_bytes:get_index(2), ip_bytes:get_index(3))
+                cmd_data_subtree:add(f_ip_addr, buffer(4,4))
+                cmd_data_subtree:add("IP Address: %s", ip_str)
+                
+                -- 解析子网掩码
+                local netmask_bytes = buffer(8,4):bytes()
+                local netmask_str = string.format("%d.%d.%d.%d", netmask_bytes:get_index(0), netmask_bytes:get_index(1), netmask_bytes:get_index(2), netmask_bytes:get_index(3))
+                cmd_data_subtree:add(f_net_mask, buffer(8,4))
+                cmd_data_subtree:add("Net Mask: %s", netmask_str)
+                
+                -- 解析网关地址
+                local gw_bytes = buffer(12,4):bytes()
+                local gw_str = string.format("%d.%d.%d.%d", gw_bytes:get_index(0), gw_bytes:get_index(1), gw_bytes:get_index(2), gw_bytes:get_index(3))
+                cmd_data_subtree:add(f_gw_addr, buffer(12,4))
+                cmd_data_subtree:add("Gateway: %s", gw_str)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "获取IP信息应答长度不足")
+            end
+
+        -- 重启设备请求 (CMD Set 0x00, CMD ID 0x0A, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x0A and cmd_type_val == 0x00 then
+            if data_length >= 4 then
+                local timeout_val = buffer(2,2):le_uint()
+                cmd_data_subtree:add(f_timeout, buffer(2,2), timeout_val)
+                cmd_data_subtree:add("Timeout: %d ms", timeout_val)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "重启设备请求长度不足")
+            end
+
+        -- 重启设备应答 (CMD Set 0x00, CMD ID 0x0A, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x0A and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "重启设备应答长度不足")
+            end
+
+        -- 写配置参数请求 (CMD Set 0x00, CMD ID 0x0B, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x0B and cmd_type_val == 0x00 then
+            if data_length >= 4 then
+                local param_key_val = buffer(2,1):uint()
+                local param_key_desc = param_key_map[param_key_val] or string.format("未知参数键 (0x%02X)", param_key_val)
+                cmd_data_subtree:add(f_param_key, buffer(2,1), param_key_val)
+                cmd_data_subtree:add("Parameter Key: 0x%02X (%s)", param_key_val, param_key_desc)
+                
+                local param_length_val = buffer(3,1):uint()
+                cmd_data_subtree:add(f_param_length, buffer(3,1), param_length_val)
+                cmd_data_subtree:add("Parameter Length: %d bytes", param_length_val)
+                
+                if data_length >= 4 + param_length_val then
+                    local param_value_buffer = buffer(4, param_length_val)
+                    cmd_data_subtree:add(f_param_value, param_value_buffer)
+                    
+                    -- 根据参数键解析参数值
+                    if param_key_val == 0x01 and param_length_val >= 1 then
+                        local sensitivity_val = param_value_buffer(0,1):uint()
+                        local sensitivity_desc = high_sensitivity_map[sensitivity_val] or string.format("未知灵敏度值 (0x%02X)", sensitivity_val)
+                        cmd_data_subtree:add("High Sensitivity: 0x%02X (%s)", sensitivity_val, sensitivity_desc)
+                    elseif param_key_val == 0x02 and param_length_val >= 1 then
+                        local scan_mode_val = param_value_buffer(0,1):uint()
+                        local scan_mode_desc = scan_mode_map[scan_mode_val] or string.format("未知扫描模式 (0x%02X)", scan_mode_val)
+                        cmd_data_subtree:add("Scan Mode: 0x%02X (%s)", scan_mode_val, scan_mode_desc)
+                    elseif param_key_val == 0x03 and param_length_val >= 1 then
+                        local slot_id_val = param_value_buffer(0,1):uint()
+                        cmd_data_subtree:add("Slot ID: %d", slot_id_val)
+                    else
+                        -- 显示原始参数值
+                        if param_length_val <= 16 then
+                            cmd_data_subtree:add("Parameter Value: " .. tostring(param_value_buffer:bytes()))
+                        else
+                            cmd_data_subtree:add("Parameter Value: " .. tostring(param_value_buffer(0,16):bytes()) .. "...")
+                        end
+                    end
+                else
+                    cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "参数值长度不足")
+                end
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "写配置参数请求长度不足")
+            end
+
+        -- 写配置参数应答 (CMD Set 0x00, CMD ID 0x0B, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x0B and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "写配置参数应答长度不足")
+            end
+
+        -- 读配置参数请求 (CMD Set 0x00, CMD ID 0x0C, 且为CMD类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x0C and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local param_key_val = buffer(2,1):uint()
+                local param_key_desc = param_key_map[param_key_val] or string.format("未知参数键 (0x%02X)", param_key_val)
+                cmd_data_subtree:add(f_param_key, buffer(2,1), param_key_val)
+                cmd_data_subtree:add("Parameter Key: 0x%02X (%s)", param_key_val, param_key_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "读配置参数请求长度不足")
+            end
+
+        -- 读配置参数应答 (CMD Set 0x00, CMD ID 0x0C, 且为ACK类型)
+        elseif cmd_set_val == 0x00 and cmd_id_val == 0x0C and cmd_type_val == 0x01 then
+            if data_length >= 4 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+                
+                local param_key_val = buffer(3,1):uint()
+                local param_key_desc = param_key_map[param_key_val] or string.format("未知参数键 (0x%02X)", param_key_val)
+                cmd_data_subtree:add(f_param_key, buffer(3,1), param_key_val)
+                cmd_data_subtree:add("Parameter Key: 0x%02X (%s)", param_key_val, param_key_desc)
+                
+                if data_length >= 5 then
+                    local param_length_val = buffer(4,1):uint()
+                    cmd_data_subtree:add(f_param_length, buffer(4,1), param_length_val)
+                    cmd_data_subtree:add("Parameter Length: %d bytes", param_length_val)
+                    
+                    if data_length >= 5 + param_length_val then
+                        local param_value_buffer = buffer(5, param_length_val)
+                        cmd_data_subtree:add(f_param_value, param_value_buffer)
+                        
+                        -- 根据参数键解析参数值
+                        if param_key_val == 0x01 and param_length_val >= 1 then
+                            local sensitivity_val = param_value_buffer(0,1):uint()
+                            local sensitivity_desc = high_sensitivity_map[sensitivity_val] or string.format("未知灵敏度值 (0x%02X)", sensitivity_val)
+                            cmd_data_subtree:add("High Sensitivity: 0x%02X (%s)", sensitivity_val, sensitivity_desc)
+                        elseif param_key_val == 0x02 and param_length_val >= 1 then
+                            local scan_mode_val = param_value_buffer(0,1):uint()
+                            local scan_mode_desc = scan_mode_map[scan_mode_val] or string.format("未知扫描模式 (0x%02X)", scan_mode_val)
+                            cmd_data_subtree:add("Scan Mode: 0x%02X (%s)", scan_mode_val, scan_mode_desc)
+                        elseif param_key_val == 0x03 and param_length_val >= 1 then
+                            local slot_id_val = param_value_buffer(0,1):uint()
+                            cmd_data_subtree:add("Slot ID: %d", slot_id_val)
+                        else
+                            -- 显示原始参数值
+                            if param_length_val <= 16 then
+                                cmd_data_subtree:add("Parameter Value: " .. tostring(param_value_buffer:bytes()))
+                            else
+                                cmd_data_subtree:add("Parameter Value: " .. tostring(param_value_buffer(0,16):bytes()) .. "...")
+                            end
+                        end
+                    else
+                        cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "参数值长度不足")
+                    end
+                end
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "读配置参数应答长度不足")
+            end
+
+
+    -- 0x01 雷达指令集        
+        -- 模式切换请求 (CMD Set 0x01, CMD ID 0x00, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x00 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local lidar_mode_val = buffer(2,1):uint()
+                local lidar_mode_desc = lidar_mode_map[lidar_mode_val] or string.format("未知雷达模式 (0x%02X)", lidar_mode_val)
+                cmd_data_subtree:add(f_lidar_mode, buffer(2,1), lidar_mode_val)
+                cmd_data_subtree:add("LiDAR Mode: 0x%02X (%s)", lidar_mode_val, lidar_mode_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "模式切换请求长度不足")
+            end
+
+        -- 模式切换应答 (CMD Set 0x01, CMD ID 0x00, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x00 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "模式切换应答长度不足")
+            end
+
+        -- 写入外部参数请求 (CMD Set 0x01, CMD ID 0x01, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x01 and cmd_type_val == 0x00 then
+            if data_length >= 26 then
+                local roll_val = buffer(2,4):le_float()
+                cmd_data_subtree:add(f_roll, buffer(2,4), roll_val)
+                cmd_data_subtree:add("Roll: %.3f degrees", roll_val)
+                
+                local pitch_val = buffer(6,4):le_float()
+                cmd_data_subtree:add(f_pitch, buffer(6,4), pitch_val)
+                cmd_data_subtree:add("Pitch: %.3f degrees", pitch_val)
+                
+                local yaw_val = buffer(10,4):le_float()
+                cmd_data_subtree:add(f_yaw, buffer(10,4), yaw_val)
+                cmd_data_subtree:add("Yaw: %.3f degrees", yaw_val)
+                
+                local x_val = buffer(14,4):le_int()
+                cmd_data_subtree:add(f_x, buffer(14,4), x_val)
+                cmd_data_subtree:add("X: %d mm", x_val)
+                
+                local y_val = buffer(18,4):le_int()
+                cmd_data_subtree:add(f_y, buffer(18,4), y_val)
+                cmd_data_subtree:add("Y: %d mm", y_val)
+                
+                local z_val = buffer(22,4):le_int()
+                cmd_data_subtree:add(f_z, buffer(22,4), z_val)
+                cmd_data_subtree:add("Z: %d mm", z_val)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "写入外部参数请求长度不足")
+            end
+
+        -- 写入外部参数应答 (CMD Set 0x01, CMD ID 0x01, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x01 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "写入外部参数应答长度不足")
+            end
+
+        -- 读取外部参数请求 (CMD Set 0x01, CMD ID 0x02, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x02 and cmd_type_val == 0x00 then
+            -- 读取外部参数请求没有额外数据字段
+            if data_length > 2 then
+                cmd_data_subtree:add("No additional data expected for read external parameters request")
+            end
+
+        -- 读取外部参数应答 (CMD Set 0x01, CMD ID 0x02, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x02 and cmd_type_val == 0x01 then
+            if data_length >= 27 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+                
+                local roll_val = buffer(3,4):le_float()
+                cmd_data_subtree:add(f_roll, buffer(3,4), roll_val)
+                cmd_data_subtree:add("Roll: %.3f degrees", roll_val)
+                
+                local pitch_val = buffer(7,4):le_float()
+                cmd_data_subtree:add(f_pitch, buffer(7,4), pitch_val)
+                cmd_data_subtree:add("Pitch: %.3f degrees", pitch_val)
+                
+                local yaw_val = buffer(11,4):le_float()
+                cmd_data_subtree:add(f_yaw, buffer(11,4), yaw_val)
+                cmd_data_subtree:add("Yaw: %.3f degrees", yaw_val)
+                
+                local x_val = buffer(15,4):le_int()
+                cmd_data_subtree:add(f_x, buffer(15,4), x_val)
+                cmd_data_subtree:add("X: %d mm", x_val)
+                
+                local y_val = buffer(19,4):le_int()
+                cmd_data_subtree:add(f_y, buffer(19,4), y_val)
+                cmd_data_subtree:add("Y: %d mm", y_val)
+                
+                local z_val = buffer(23,4):le_int()
+                cmd_data_subtree:add(f_z, buffer(23,4), z_val)
+                cmd_data_subtree:add("Z: %d mm", z_val)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "读取外部参数应答长度不足")
+            end
+
+        -- 抗雨雾功能请求 (CMD Set 0x01, CMD ID 0x03, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x03 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local state_val = buffer(2,1):uint()
+                local state_desc = state_map[state_val] or string.format("未知状态 (0x%02X)", state_val)
+                cmd_data_subtree:add(f_state, buffer(2,1), state_val)
+                cmd_data_subtree:add("Rain Fog State: 0x%02X (%s)", state_val, state_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "抗雨雾功能请求长度不足")
+            end
+
+        -- 抗雨雾功能应答 (CMD Set 0x01, CMD ID 0x03, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x03 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "抗雨雾功能应答长度不足")
+            end
+
+        -- 风扇控制请求 (CMD Set 0x01, CMD ID 0x04, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x04 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local state_val = buffer(2,1):uint()
+                local state_desc = state_map[state_val] or string.format("未知状态 (0x%02X)", state_val)
+                cmd_data_subtree:add(f_state, buffer(2,1), state_val)
+                cmd_data_subtree:add("Fan State: 0x%02X (%s)", state_val, state_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "风扇控制请求长度不足")
+            end
+
+        -- 风扇控制应答 (CMD Set 0x01, CMD ID 0x04, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x04 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "风扇控制应答长度不足")
+            end
+
+        -- 读取风扇状态请求 (CMD Set 0x01, CMD ID 0x05, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x05 and cmd_type_val == 0x00 then
+            -- 读取风扇状态请求没有额外数据字段
+            if data_length > 2 then
+                cmd_data_subtree:add("No additional data expected for read fan state request")
+            end
+
+        -- 读取风扇状态应答 (CMD Set 0x01, CMD ID 0x05, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x05 and cmd_type_val == 0x01 then
+            if data_length >= 4 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+                
+                local state_val = buffer(3,1):uint()
+                local state_desc = state_map[state_val] or string.format("未知状态 (0x%02X)", state_val)
+                cmd_data_subtree:add(f_state, buffer(3,1), state_val)
+                cmd_data_subtree:add("Fan State: 0x%02X (%s)", state_val, state_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "读取风扇状态应答长度不足")
+            end
+
+        -- 设置回波模式请求 (CMD Set 0x01, CMD ID 0x06, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x06 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local mode_val = buffer(2,1):uint()
+                local mode_desc = echo_mode_map[mode_val] or string.format("未知模式 (0x%02X)", mode_val)
+                cmd_data_subtree:add(f_mode, buffer(2,1), mode_val)
+                cmd_data_subtree:add("Echo Mode: 0x%02X (%s)", mode_val, mode_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "设置回波模式请求长度不足")
+            end
+
+        -- 设置回波模式应答 (CMD Set 0x01, CMD ID 0x06, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x06 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "设置回波模式应答长度不足")
+            end
+
+        -- 获取回波模式请求 (CMD Set 0x01, CMD ID 0x07, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x07 and cmd_type_val == 0x00 then
+            -- 获取回波模式请求没有额外数据字段
+            if data_length > 2 then
+                cmd_data_subtree:add("No additional data expected for get echo mode request")
+            end
+
+        -- 获取回波模式应答 (CMD Set 0x01, CMD ID 0x07, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x07 and cmd_type_val == 0x01 then
+            if data_length >= 4 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+                
+                local mode_val = buffer(3,1):uint()
+                local mode_desc = echo_mode_map[mode_val] or string.format("未知模式 (0x%02X)", mode_val)
+                cmd_data_subtree:add(f_mode, buffer(3,1), mode_val)
+                cmd_data_subtree:add("Echo Mode: 0x%02X (%s)", mode_val, mode_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "获取回波模式应答长度不足")
+            end
+
+        -- 设置IMU频率请求 (CMD Set 0x01, CMD ID 0x08, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x08 and cmd_type_val == 0x00 then
+            if data_length >= 3 then
+                local frequency_val = buffer(2,1):uint()
+                local frequency_desc = imu_frequency_map[frequency_val] or string.format("未知频率 (0x%02X)", frequency_val)
+                cmd_data_subtree:add(f_frequency, buffer(2,1), frequency_val)
+                cmd_data_subtree:add("IMU Frequency: 0x%02X (%s)", frequency_val, frequency_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "设置IMU频率请求长度不足")
+            end
+
+        -- 设置IMU频率应答 (CMD Set 0x01, CMD ID 0x08, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x08 and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "设置IMU频率应答长度不足")
+            end
+
+        -- 获取IMU频率请求 (CMD Set 0x01, CMD ID 0x09, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x09 and cmd_type_val == 0x00 then
+            -- 获取IMU频率请求没有额外数据字段
+            if data_length > 2 then
+                cmd_data_subtree:add("No additional data expected for get IMU frequency request")
+            end
+
+        -- 获取IMU频率应答 (CMD Set 0x01, CMD ID 0x09, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x09 and cmd_type_val == 0x01 then
+            if data_length >= 4 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+                
+                local frequency_val = buffer(3,1):uint()
+                local frequency_desc = imu_frequency_map[frequency_val] or string.format("未知频率 (0x%02X)", frequency_val)
+                cmd_data_subtree:add(f_frequency, buffer(3,1), frequency_val)
+                cmd_data_subtree:add("IMU Frequency: 0x%02X (%s)", frequency_val, frequency_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "获取IMU频率应答长度不足")
+            end
+
+        -- 更新UTC时间请求 (CMD Set 0x01, CMD ID 0x0A, 且为CMD类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x0A and cmd_type_val == 0x00 then
+            if data_length >= 10 then
+                local year_val = buffer(2,1):uint()
+                cmd_data_subtree:add(f_year, buffer(2,1), year_val)
+                cmd_data_subtree:add("Year: %d (代表 %d 年)", year_val, 2000 + year_val)
+                
+                local month_val = buffer(3,1):uint()
+                cmd_data_subtree:add(f_month, buffer(3,1), month_val)
+                cmd_data_subtree:add("Month: %d", month_val)
+                
+                local day_val = buffer(4,1):uint()
+                cmd_data_subtree:add(f_day, buffer(4,1), day_val)
+                cmd_data_subtree:add("Day: %d", day_val)
+                
+                local hour_val = buffer(5,1):uint()
+                cmd_data_subtree:add(f_hour, buffer(5,1), hour_val)
+                cmd_data_subtree:add("Hour: %d", hour_val)
+                
+                local microsecond_val = buffer(6,4):le_uint()
+                cmd_data_subtree:add(f_microsecond, buffer(6,4), microsecond_val)
+                cmd_data_subtree:add("Microsecond: %d us", microsecond_val)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "更新UTC时间请求长度不足")
+            end
+
+        -- 更新UTC时间应答 (CMD Set 0x01, CMD ID 0x0A, 且为ACK类型)
+        elseif cmd_set_val == 0x01 and cmd_id_val == 0x0A and cmd_type_val == 0x01 then
+            if data_length >= 3 then
+                local ret_code_val = buffer(2,1):uint()
+                local ret_code_desc = lidar_ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
+                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
+                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
+            else
+                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "更新UTC时间应答长度不足")
+            end
+        
+        else
+            -- 其他命令的通用数据显示
+            if data_length - 2 <= 32 then
+                cmd_data_subtree:add("Data: " .. tostring(cmd_data_buffer:bytes()))
+            else
+                cmd_data_subtree:add("Data: " .. tostring(cmd_data_buffer(0,32):bytes()) .. "...")
+            end
+        end
+    end
+end
+
+-- 解析控制指令帧
+local function dissect_control_frame(buffer, pinfo, tree)
+    pinfo.cols.protocol = "LivoxOldCtrl"
+    local subtree = tree:add(livox_old_data_proto, buffer(), "Livox 控制指令帧（旧）")
+    
+    -- 检查最小长度
+    if buffer:len() < 13 then
+        subtree:add_expert_info(PI_MALFORMED, PI_ERROR, "控制帧长度不足")
+        return
+    end
+    
+    -- 解析SOF字段
+    local sof_val = buffer(0,1):uint()
+    if sof_val ~= 0xAA then
+        subtree:add_expert_info(PI_MALFORMED, PI_WARN, "无效的起始字节")
+    end
+    subtree:add(f_ctrl_sof, buffer(0,1), sof_val, string.format("Start of Frame: 0x%02X", sof_val))
+    
+    -- 解析版本字段
+    local version_val = buffer(1,1):uint()
+    subtree:add(f_ctrl_version, buffer(1,1), version_val, string.format("Protocol Version: %d", version_val))
+    
+    -- 解析长度字段
+    local length_val = buffer(2,2):le_uint()
+    subtree:add(f_ctrl_length, buffer(2,2), length_val, string.format("Frame Length: %d bytes", length_val))
+    
+    -- 检查长度是否匹配
+    if buffer:len() ~= length_val then
+        subtree:add_expert_info(PI_MALFORMED, PI_WARN, string.format("长度不匹配: 实际%d字节, 声明%d字节", buffer:len(), length_val))
+    end
+    
+    -- 解析命令类型字段
+    local cmd_type_val = buffer(4,1):uint()
+    local cmd_type_desc = ctrl_cmd_type_map[cmd_type_val] or string.format("未知命令类型 (0x%02X)", cmd_type_val)
+    subtree:add(f_ctrl_cmd_type, buffer(4,1), cmd_type_val, string.format("Command Type: 0x%02X (%s)", cmd_type_val, cmd_type_desc))
+    
+    -- 解析序列号字段
+    local seq_num_val = buffer(5,2):le_uint()
+    subtree:add(f_ctrl_seq_num, buffer(5,2), seq_num_val, string.format("Sequence Number: %d", seq_num_val))
+    
+    -- 解析CRC16字段
+    local crc16_val = buffer(7,2):le_uint()
+    subtree:add(f_ctrl_crc16, buffer(7,2), crc16_val, string.format("Header CRC-16: 0x%04X", crc16_val))
+    
+    -- 解析数据域
+    local data_length = length_val - 13  -- 总长度减去固定头部9字节和CRC32的4字节
+    if data_length > 0 then
+        local data_buffer = buffer(9, data_length)
+        local data_subtree = subtree:add(f_ctrl_data, data_buffer, string.format("Data Field (%d bytes)", data_length))
+        
+        -- 解析数据段（CMD Set + CMD ID + CMD Data）
+        dissect_control_data(data_buffer, data_subtree, cmd_type_val)
+    end
+    
+    -- 解析CRC32字段
+    if buffer:len() >= length_val then
+        local crc32_offset = length_val - 4
+        local crc32_val = buffer(crc32_offset,4):le_uint()
+        subtree:add(f_ctrl_crc32, buffer(crc32_offset,4), crc32_val, string.format("Frame CRC-32: 0x%08X", crc32_val))
+    end
+end
+
+-- 解析老产品点云/IMU数据帧
+local function dissect_old_data_frame(buffer, pinfo, tree)
     pinfo.cols.protocol = "LivoxOldData"
     local subtree = tree:add(livox_old_data_proto, buffer(), "Livox Old Product Data (Avia/Horizon/Tele-15/Mid-70/Mid-40)")
 
@@ -1273,6 +2555,19 @@ function livox_old_data_proto.dissector(buffer, pinfo, tree)
     end
 end
 
--- 注册老产品数据协议到UDP端口60003
+function livox_old_data_proto.dissector(buffer, pinfo, tree)
+    -- 根据端口号判断帧类型
+    if pinfo.dst_port == 65000 or pinfo.src_port == 65000 then
+        -- 控制指令帧（65000端口）
+        dissect_control_frame(buffer, pinfo, tree)
+    else
+        -- 老产品数据帧（60001/60003端口）
+        dissect_old_data_frame(buffer, pinfo, tree)
+    end
+end
+
+-- 注册协议到不同端口
+udp_port = DissectorTable.get("udp.port")
 udp_port:add(60001, livox_old_data_proto) -- 点云数据
 udp_port:add(60003, livox_old_data_proto) -- IMU数据
+udp_port:add(65000, livox_old_data_proto) -- 控制指令
