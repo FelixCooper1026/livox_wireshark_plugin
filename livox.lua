@@ -6,6 +6,7 @@
 -- Version: 1.2.1
 -------------------------------------------------------------------------------
 -- History:
+-- 2025-11-11: 优化老工规雷达控制指令帧字段显示
 -- 2025-05-26: 增加对应字段高亮显示功能
 -- beta modify：将core_temp改为float
 -- 2025-06-03：修复端口号解析错误，应为小端序
@@ -1079,58 +1080,58 @@ function livox_data_proto.dissector(buffer, pinfo, tree)
             local acc_z_val = buffer(data_offset+20,4):le_float()
             subtree:add(f_acc_z, buffer(data_offset+20,4), acc_z_val, string.format("acc_z (g): %.10f", acc_z_val))
             
-        else
-            -- 点云数据结构化解析
-            -- local point_size = 0
-            -- local point_type_desc = ""
-            -- if data_type == 1 then
-            --     point_size = 14
-            --     point_type_desc = "直角坐标32bit"
-            -- elseif data_type == 2 then
-            --     point_size = 8
-            --     point_type_desc = "直角坐标16bit"
-            -- elseif data_type == 3 then
-            --     point_size = 10
-            --     point_type_desc = "球坐标"
-            -- end
+        else --[[
+            -- 点云数据结构化解析（因解析点云数据耗时过久，暂时注释掉，需要时再打开）
+            local point_size = 0
+            local point_type_desc = ""
+            if data_type == 1 then
+                point_size = 14
+                point_type_desc = "直角坐标32bit"
+            elseif data_type == 2 then
+                point_size = 8
+                point_type_desc = "直角坐标16bit"
+            elseif data_type == 3 then
+                point_size = 10
+                point_type_desc = "球坐标"
+            end
 
-            -- if point_size > 0 and dot_num > 0 and buffer:len() >= data_offset + point_size * dot_num then
-            --     local point_desc = string.format("点云数据 (类型: %d, %s, %d个点)", data_type, point_type_desc, dot_num)
-            --     local points_tree = subtree:add(f_data, buffer(data_offset, point_size * dot_num))
-            --     points_tree:set_text(point_desc)
-            --     
-            --     for i=0, dot_num-1 do
-            --         local base = data_offset + i * point_size
-            --         if base + point_size > buffer:len() then break end
-            --         if data_type == 1 then
-            --             local x = buffer(base,4):le_int()
-            --             local y = buffer(base+4,4):le_int()
-            --             local z = buffer(base+8,4):le_int()
-            --             local reflect = buffer(base+12,1):uint()
-            --             local tag = buffer(base+13,1):uint()
-            --             points_tree:add(buffer(base,point_size), string.format("Point %d: X=%dmm Y=%dmm Z=%dmm 反射率=%d Tag=%d", i+1, x, y, z, reflect, tag))
-            --         elseif data_type == 2 then
-            --             local x = buffer(base,2):le_int()
-            --             local y = buffer(base+2,2):le_int()
-            --             local z = buffer(base+4,2):le_int()
-            --             local reflect = buffer(base+6,1):uint()
-            --             local tag = buffer(base+7,1):uint()
-            --             points_tree:add(buffer(base,point_size), string.format("Point %d: X=%d*10mm Y=%d*10mm Z=%d*10mm Tag=%d 标签=%d", i+1, x, y, z, reflect, tag))
-            --         elseif data_type == 3 then
-            --             local depth = buffer(base,4):le_uint()
-            --             local zenith = buffer(base+4,2):le_uint()
-            --             local azimuth = buffer(base+6,2):le_uint()
-            --             local reflect = buffer(base+8,1):uint()
-            --             local tag = buffer(base+9,1):uint()
-            --             points_tree:add(buffer(base,point_size), string.format("Point %d: 深度=%dmm 天顶角=%.2f° 方位角=%.2f° 反射率=%d Tag=%d", i+1, depth, zenith/100, azimuth/100, reflect, tag))
-            --         end
-            --     end
-            --     if buffer:len() > data_offset + point_size * dot_num then
-            --         points_tree:add(buffer(data_offset + point_size * dot_num, buffer:len() - data_offset - point_size * dot_num), "剩余原始数据")
-            --     end
-            -- else
+            if point_size > 0 and dot_num > 0 and buffer:len() >= data_offset + point_size * dot_num then
+                local point_desc = string.format("点云数据 (类型: %d, %s, %d个点)", data_type, point_type_desc, dot_num)
+                local points_tree = subtree:add(f_data, buffer(data_offset, point_size * dot_num))
+                points_tree:set_text(point_desc)
+                
+                for i=0, dot_num-1 do
+                    local base = data_offset + i * point_size
+                    if base + point_size > buffer:len() then break end
+                    if data_type == 1 then
+                        local x = buffer(base,4):le_int()
+                        local y = buffer(base+4,4):le_int()
+                        local z = buffer(base+8,4):le_int()
+                        local reflect = buffer(base+12,1):uint()
+                        local tag = buffer(base+13,1):uint()
+                        points_tree:add(buffer(base,point_size), string.format("Point %d: X=%dmm Y=%dmm Z=%dmm 反射率=%d Tag=%d", i+1, x, y, z, reflect, tag))
+                    elseif data_type == 2 then
+                        local x = buffer(base,2):le_int()
+                        local y = buffer(base+2,2):le_int()
+                        local z = buffer(base+4,2):le_int()
+                        local reflect = buffer(base+6,1):uint()
+                        local tag = buffer(base+7,1):uint()
+                        points_tree:add(buffer(base,point_size), string.format("Point %d: X=%d*10mm Y=%d*10mm Z=%d*10mm Tag=%d 标签=%d", i+1, x, y, z, reflect, tag))
+                    elseif data_type == 3 then
+                        local depth = buffer(base,4):le_uint()
+                        local zenith = buffer(base+4,2):le_uint()
+                        local azimuth = buffer(base+6,2):le_uint()
+                        local reflect = buffer(base+8,1):uint()
+                        local tag = buffer(base+9,1):uint()
+                        points_tree:add(buffer(base,point_size), string.format("Point %d: 深度=%dmm 天顶角=%.2f° 方位角=%.2f° 反射率=%d Tag=%d", i+1, depth, zenith/100, azimuth/100, reflect, tag))
+                    end
+                end
+                if buffer:len() > data_offset + point_size * dot_num then
+                    points_tree:add(buffer(data_offset + point_size * dot_num, buffer:len() - data_offset - point_size * dot_num), "剩余原始数据")
+                end
+            else
                 subtree:add(f_data, buffer(data_offset, buffer:len()-data_offset))
-            -- end
+            end --]]
         end
     end
 end
@@ -1170,7 +1171,7 @@ local f_ctrl_length = ProtoField.uint16("livoxoldctrl.length", "Frame Length", b
 local f_ctrl_cmd_type = ProtoField.uint8("livoxoldctrl.cmd_type", "Command Type", base.HEX)
 local f_ctrl_seq_num = ProtoField.uint16("livoxoldctrl.seq_num", "Sequence Number", base.DEC)
 local f_ctrl_crc16 = ProtoField.uint16("livoxoldctrl.crc16", "Header CRC-16", base.HEX)
-local f_ctrl_data = ProtoField.bytes("livoxoldctrl.data", "Data Field")
+local f_ctrl_data = ProtoField.bytes("livoxoldctrl.data", "Data Field", base.SPACE)
 local f_ctrl_crc32 = ProtoField.uint32("livoxoldctrl.crc32", "Frame CRC-32", base.HEX)
 
 -- 控制指令数据段字段定义
@@ -1212,7 +1213,7 @@ local f_sample_ctrl = ProtoField.uint8("livoxoldctrl.sample_ctrl", "Sample Contr
 local f_coordinate_type = ProtoField.uint8("livoxoldctrl.coordinate_type", "Coordinate Type", base.HEX)
 
 -- 异常状态信息
-local f_status_code = ProtoField.uint32("livoxoldctrl.old_status_code", "Status Code", base.HEX)
+local f_status_code_old = ProtoField.uint32("livoxoldctrl.old_status_code", "Status Code", base.HEX)
 
 local f_ip_mode = ProtoField.uint8("livoxoldctrl.ip_mode", "IP Mode", base.HEX)
 local f_ip_addr = ProtoField.ipv4("livoxoldctrl.ip_addr", "IP Address")
@@ -1247,7 +1248,7 @@ local f_microsecond = ProtoField.uint32("livoxoldctrl.microsecond", "Microsecond
 
 livox_old_data_proto.fields = {
     f_old_version, f_slot_id, f_lidar_id, f_reserved,
-    f_status_code, f_timestamp_type, f_data_type, f_timestamp, f_data,
+    f_status_code_old, f_timestamp_type, f_data_type, f_timestamp, f_data,
     f_old_gyro_x, f_old_gyro_y, f_old_gyro_z, f_old_acc_x, f_old_acc_y, f_old_acc_z,
     f_ctrl_sof, f_ctrl_version, f_ctrl_length, f_ctrl_cmd_type, f_ctrl_seq_num,
     f_ctrl_crc16, f_ctrl_data, f_ctrl_crc32,
@@ -1462,11 +1463,19 @@ local function dissect_control_data(buffer, subtree, cmd_type_val)
     
     subtree:add(f_cmd_id, buffer(1,1), cmd_id_val, string.format("CMD ID: 0x%02X (%s)", cmd_id_val, cmd_desc))
     
-    -- 解析特定命令的数据内容
-    if data_length > 2 then
-        local cmd_data_buffer = buffer(2, data_length - 2)
-        local cmd_data_subtree = subtree:add(f_cmd_data, cmd_data_buffer, string.format("CMD Data (%d bytes)", data_length - 2))
-
+-- 解析特定命令的数据内容
+if data_length > 2 then
+    local cmd_data_buffer = buffer(2, data_length - 2)
+    -- 构建十六进制字符串
+    local hex_data = ""
+    for i = 0, cmd_data_buffer:len() - 1 do
+        hex_data = hex_data .. string.format("%02X ", cmd_data_buffer(i, 1):uint())
+    end
+    
+    -- 创建CMD Data子树
+    local cmd_data_subtree = subtree:add("CMD Data")
+    cmd_data_subtree:set_text("CMD Data: " .. hex_data)
+    
     -- 0x00通用指令集    
         -- 广播消息 (CMD Set 0x00, CMD ID 0x00)
         if cmd_set_val == 0x00 and cmd_id_val == 0x00 then
@@ -1543,159 +1552,183 @@ local function dissect_control_data(buffer, subtree, cmd_type_val)
         
         -- 心跳应答 (CMD Set 0x00, CMD ID 0x03, 且为ACK类型)
         elseif cmd_set_val == 0x00 and cmd_id_val == 0x03 and cmd_type_val == 0x01 then
-            if data_length >= 9 then
-                local ret_code_val = buffer(2,1):uint()
-                local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
-                cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val)
-                cmd_data_subtree:add("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc)
-                
-                local work_state_val = buffer(3,1):uint()
-                local work_state_desc = work_state_map[work_state_val] or string.format("未知工作状态 (0x%02X)", work_state_val)
-                cmd_data_subtree:add(f_work_state, buffer(3,1), work_state_val)
-                cmd_data_subtree:add("Work State: 0x%02X (%s)", work_state_val, work_state_desc)
-                
-                local feature_msg_val = buffer(4,1):uint()
-                local rain_fog_status = (feature_msg_val & 0x01) > 0 and "开启" or "关闭"
-                cmd_data_subtree:add(f_feature_msg, buffer(4,1), feature_msg_val)
-                cmd_data_subtree:add("Feature Message: 0x%02X (抗雨雾: %s)", feature_msg_val, rain_fog_status)
-                
-                local ack_msg_val = buffer(5,4):le_uint()
-                cmd_data_subtree:add(f_ack_msg, buffer(5,4), ack_msg_val)
-                
-                -- 根据工作状态解析ACK信息
-                if work_state_val == 0x00 then
-                    -- 初始化状态：显示初始化百分比
-                    local init_percentage = ack_msg_val
-                    cmd_data_subtree:add("ACK Message: %d%% (初始化百分比)", init_percentage)
-                else
-                    -- 其他状态：按照异常状态码解析
-                    cmd_data_subtree:add("ACK Message: 0x%08X", ack_msg_val)
+            if cmd_data_subtree then
+                if data_length >= 9 then
+                    local ret_code_val = buffer(2,1):uint()
+                    local ret_code_desc = ret_code_map[ret_code_val] or string.format("未知返回码 (0x%02X)", ret_code_val)
                     
-                    -- 详细解析状态码（类似于异常状态推送信息的解析）
-                    local status_details = {}
-                    
-                    -- 温度状态 (Bit0-1)
-                    local temp_status = (ack_msg_val >> 0) & 0x3
-                    if temp_status == 0 then
-                        table.insert(status_details, "温度正常")
-                    elseif temp_status == 1 then
-                        table.insert(status_details, "温度偏高或偏低")
-                    elseif temp_status == 2 then
-                        table.insert(status_details, "温度极高或极低")
-                    end
-                    
-                    -- 电压状态 (Bit2-3)
-                    local volt_status = (ack_msg_val >> 2) & 0x3
-                    if volt_status == 0 then
-                        table.insert(status_details, "电压正常")
-                    elseif volt_status == 1 then
-                        table.insert(status_details, "电压偏高")
-                    elseif volt_status == 2 then
-                        table.insert(status_details, "电压极高")
-                    end
-                    
-                    -- 电机状态 (Bit4-5)
-                    local motor_status = (ack_msg_val >> 4) & 0x3
-                    if motor_status == 0 then
-                        table.insert(status_details, "电机正常")
-                    elseif motor_status == 1 then
-                        table.insert(status_details, "电机警告")
-                    elseif motor_status == 2 then
-                        table.insert(status_details, "电机错误，无法工作")
-                    end
-                    
-                    -- 脏污警告 (Bit6-7)
-                    local dirty_warn = (ack_msg_val >> 6) & 0x3
-                    if dirty_warn == 0 then
-                        table.insert(status_details, "无脏污和遮挡")
-                    elseif dirty_warn >= 1 then
-                        table.insert(status_details, "有脏污和遮挡")
-                    end
-                    
-                    -- 固件状态 (Bit8)
-                    local firmware_status = (ack_msg_val >> 8) & 0x1
-                    if firmware_status == 0 then
-                        table.insert(status_details, "固件正常")
+                    -- 安全地添加字段
+                    if f_ret_code then
+                        cmd_data_subtree:add(f_ret_code, buffer(2,1), ret_code_val, string.format("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc))
                     else
-                        table.insert(status_details, "固件出错，需要升级")
+                        cmd_data_subtree:add(string.format("Return Code: 0x%02X (%s)", ret_code_val, ret_code_desc))
                     end
                     
-                    -- PPS状态 (Bit9)
-                    local pps_status = (ack_msg_val >> 9) & 0x1
-                    if pps_status == 0 then
-                        table.insert(status_details, "无PPS信号")
+                    local work_state_val = buffer(3,1):uint()
+                    local work_state_desc = work_state_map[work_state_val] or string.format("未知工作状态 (0x%02X)", work_state_val)
+                    
+                    if f_work_state then
+                        cmd_data_subtree:add(f_work_state, buffer(3,1), work_state_val, string.format("Work State: 0x%02X (%s)", work_state_val, work_state_desc))
                     else
-                        table.insert(status_details, "PPS信号正常")
+                        cmd_data_subtree:add(string.format("Work State: 0x%02X (%s)", work_state_val, work_state_desc))
                     end
                     
-                    -- 设备状态 (Bit10)
-                    local device_status = (ack_msg_val >> 10) & 0x1
-                    if device_status == 0 then
-                        table.insert(status_details, "设备正常")
+                    local feature_msg_val = buffer(4,1):uint()
+                    local rain_fog_status = (feature_msg_val & 0x01) > 0 and "开启" or "关闭"
+                    
+                    if f_feature_msg then
+                        cmd_data_subtree:add(f_feature_msg, buffer(4,1), feature_msg_val, string.format("Feature Message: 0x%02X (抗雨雾: %s)", feature_msg_val, rain_fog_status))
                     else
-                        table.insert(status_details, "设备寿命警告")
+                        cmd_data_subtree:add(string.format("Feature Message: 0x%02X (抗雨雾: %s)", feature_msg_val, rain_fog_status))
                     end
                     
-                    -- 风扇状态 (Bit11)
-                    local fan_status = (ack_msg_val >> 11) & 0x1
-                    if fan_status == 0 then
-                        table.insert(status_details, "风扇正常")
+                    local ack_msg_val = buffer(5,4):le_uint()
+
+                    -- 根据工作状态解析ACK信息
+                    if work_state_val == 0x00 then
+                        -- 初始化状态：显示初始化百分比
+                        local init_percentage = ack_msg_val
+                        if f_ack_msg then
+                            cmd_data_subtree:add(f_ack_msg, buffer(5,4), ack_msg_val, string.format("%d%% (初始化百分比)", init_percentage))
+                        else
+                            cmd_data_subtree:add(string.format("ACK Message: %d%% (初始化百分比)", init_percentage))
+                        end
                     else
-                        table.insert(status_details, "风扇警告（异常或用户设置停止）")
-                    end
-                    
-                    -- 自加热状态 (Bit12)
-                    local self_heating = (ack_msg_val >> 12) & 0x1
-                    if self_heating == 0 then
-                        table.insert(status_details, "低温自加热关闭")
-                    else
-                        table.insert(status_details, "低温自加热开启")
-                    end
-                    
-                    -- PTP状态 (Bit13)
-                    local ptp_status = (ack_msg_val >> 13) & 0x1
-                    if ptp_status == 0 then
-                        table.insert(status_details, "无1588信号")
-                    else
-                        table.insert(status_details, "1588信号正常")
-                    end
-                    
-                    -- 时间同步状态 (Bit14-16)
-                    local time_sync_status = (ack_msg_val >> 14) & 0x7
-                    if time_sync_status == 0 then
-                        table.insert(status_details, "未开始时间同步")
-                    elseif time_sync_status == 1 then
-                        table.insert(status_details, "使用PTP 1588同步")
-                    elseif time_sync_status == 2 then
-                        table.insert(status_details, "使用GPS同步")
-                    elseif time_sync_status == 3 then
-                        table.insert(status_details, "使用PPS同步")
-                    elseif time_sync_status == 4 then
-                        table.insert(status_details, "系统时间同步异常（最高优先级信号异常）")
-                    end
-                    
-                    -- 系统状态 (Bit30-31)
-                    local system_status = (ack_msg_val >> 30) & 0x3
-                    if system_status == 0 then
-                        table.insert(status_details, "系统正常")
-                    elseif system_status == 1 then
-                        table.insert(status_details, "系统警告")
-                    elseif system_status == 2 then
-                        table.insert(status_details, "系统错误，雷达停机")
-                    end
-                    
-                    -- 显示详细状态信息
-                    if #status_details > 0 then
-                        local status_tree = cmd_data_subtree:add("Status Details")
-                        for i, detail in ipairs(status_details) do
-                            status_tree:add("[" .. i .. "] " .. detail)
+                        -- 其他状态：按照异常状态码解析
+                        if f_ack_msg then
+                            cmd_data_subtree:add(f_ack_msg, buffer(5,4), ack_msg_val, string.format("ACK Message: 0x%08X", ack_msg_val))
+                        else
+                            cmd_data_subtree:add(string.format("ACK Message: 0x%08X", ack_msg_val))
+                        end
+                        
+                        -- 详细解析状态码（类似于异常状态推送信息的解析）
+                        local status_details = {}
+                        
+                        -- 温度状态 (Bit0-1)
+                        local temp_status = (ack_msg_val >> 0) & 0x3
+                        if temp_status == 0 then
+                            table.insert(status_details, "温度正常")
+                        elseif temp_status == 1 then
+                            table.insert(status_details, "温度偏高或偏低")
+                        elseif temp_status == 2 then
+                            table.insert(status_details, "温度极高或极低")
+                        end
+                        
+                        -- 电压状态 (Bit2-3)
+                        local volt_status = (ack_msg_val >> 2) & 0x3
+                        if volt_status == 0 then
+                            table.insert(status_details, "电压正常")
+                        elseif volt_status == 1 then
+                            table.insert(status_details, "电压偏高")
+                        elseif volt_status == 2 then
+                            table.insert(status_details, "电压极高")
+                        end
+                        
+                        -- 电机状态 (Bit4-5)
+                        local motor_status = (ack_msg_val >> 4) & 0x3
+                        if motor_status == 0 then
+                            table.insert(status_details, "电机正常")
+                        elseif motor_status == 1 then
+                            table.insert(status_details, "电机警告")
+                        elseif motor_status == 2 then
+                            table.insert(status_details, "电机错误，无法工作")
+                        end
+                        
+                        -- 脏污警告 (Bit6-7)
+                        local dirty_warn = (ack_msg_val >> 6) & 0x3
+                        if dirty_warn == 0 then
+                            table.insert(status_details, "无脏污和遮挡")
+                        elseif dirty_warn >= 1 then
+                            table.insert(status_details, "有脏污和遮挡")
+                        end
+                        
+                        -- 固件状态 (Bit8)
+                        local firmware_status = (ack_msg_val >> 8) & 0x1
+                        if firmware_status == 0 then
+                            table.insert(status_details, "固件正常")
+                        else
+                            table.insert(status_details, "固件出错，需要升级")
+                        end
+                        
+                        -- PPS状态 (Bit9)
+                        local pps_status = (ack_msg_val >> 9) & 0x1
+                        if pps_status == 0 then
+                            table.insert(status_details, "无PPS信号")
+                        else
+                            table.insert(status_details, "PPS信号正常")
+                        end
+                        
+                        -- 设备状态 (Bit10)
+                        local device_status = (ack_msg_val >> 10) & 0x1
+                        if device_status == 0 then
+                            table.insert(status_details, "设备正常")
+                        else
+                            table.insert(status_details, "设备寿命警告")
+                        end
+                        
+                        -- 风扇状态 (Bit11)
+                        local fan_status = (ack_msg_val >> 11) & 0x1
+                        if fan_status == 0 then
+                            table.insert(status_details, "风扇正常")
+                        else
+                            table.insert(status_details, "风扇警告（异常或用户设置停止）")
+                        end
+                        
+                        -- 自加热状态 (Bit12)
+                        local self_heating = (ack_msg_val >> 12) & 0x1
+                        if self_heating == 0 then
+                            table.insert(status_details, "低温自加热关闭")
+                        else
+                            table.insert(status_details, "低温自加热开启")
+                        end
+                        
+                        -- PTP状态 (Bit13)
+                        local ptp_status = (ack_msg_val >> 13) & 0x1
+                        if ptp_status == 0 then
+                            table.insert(status_details, "无1588信号")
+                        else
+                            table.insert(status_details, "1588信号正常")
+                        end
+                        
+                        -- 时间同步状态 (Bit14-16)
+                        local time_sync_status = (ack_msg_val >> 14) & 0x7
+                        if time_sync_status == 0 then
+                            table.insert(status_details, "未开始时间同步")
+                        elseif time_sync_status == 1 then
+                            table.insert(status_details, "使用PTP 1588同步")
+                        elseif time_sync_status == 2 then
+                            table.insert(status_details, "使用GPS同步")
+                        elseif time_sync_status == 3 then
+                            table.insert(status_details, "使用PPS同步")
+                        elseif time_sync_status == 4 then
+                            table.insert(status_details, "系统时间同步异常（最高优先级信号异常）")
+                        end
+                        
+                        -- 系统状态 (Bit30-31)
+                        local system_status = (ack_msg_val >> 30) & 0x3
+                        if system_status == 0 then
+                            table.insert(status_details, "系统正常")
+                        elseif system_status == 1 then
+                            table.insert(status_details, "系统警告")
+                        elseif system_status == 2 then
+                            table.insert(status_details, "系统错误，雷达停机")
+                        end
+                        
+                        -- 显示详细状态信息
+                        if #status_details > 0 then
+                            local status_tree = cmd_data_subtree:add("Status Details")
+                            for i, detail in ipairs(status_details) do
+                                status_tree:add(string.format("[%d] %s", i, detail))
+                            end
                         end
                     end
+                else
+                    if cmd_data_subtree.add_expert_info then
+                        cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "心跳应答长度不足")
+                    end
                 end
-            else
-                cmd_data_subtree:add_expert_info(PI_MALFORMED, PI_WARN, "心跳应答长度不足")
-            end
-        
+            end        
+
         -- 开始/停止采样请求 (CMD Set 0x00, CMD ID 0x04, 且为CMD类型)
         elseif cmd_set_val == 0x00 and cmd_id_val == 0x04 and cmd_type_val == 0x00 then
             if data_length >= 3 then
@@ -1758,8 +1791,8 @@ local function dissect_control_data(buffer, subtree, cmd_type_val)
         elseif cmd_set_val == 0x00 and cmd_id_val == 0x07 and cmd_type_val == 0x02 then
             if data_length >= 6 then
                 local status_code_val = buffer(2,4):le_uint()
-                cmd_data_subtree:add(f_ctrl_status_code, buffer(2,4), status_code_val)
-                cmd_data_subtree:add("Status Code: 0x%08X", status_code_val)
+                cmd_data_subtree:add(f_status_code_old, buffer(2,4), status_code_val)
+                              
                 
                 -- 详细解析状态码
                 local status_details = {}
@@ -1878,7 +1911,7 @@ local function dissect_control_data(buffer, subtree, cmd_type_val)
                 if #status_details > 0 then
                     local status_tree = cmd_data_subtree:add("Status Details")
                     for i, detail in ipairs(status_details) do
-                        status_tree:add(detail)
+                        status_tree:add(string.format("[%d] %s", i, detail))
                     end
                 end
                 
@@ -2466,13 +2499,25 @@ local function dissect_control_frame(buffer, pinfo, tree)
     subtree:add(f_ctrl_crc16, buffer(7,2), crc16_val, string.format("Header CRC-16: 0x%04X", crc16_val))
     
     -- 解析数据域
-    local data_length = length_val - 13  -- 总长度减去固定头部9字节和CRC32的4字节
+    local data_length = length_val - 13
     if data_length > 0 then
-        local data_buffer = buffer(9, data_length)
-        local data_subtree = subtree:add(f_ctrl_data, data_buffer, string.format("Data Field (%d bytes)", data_length))
-        
-        -- 解析数据段（CMD Set + CMD ID + CMD Data）
-        dissect_control_data(data_buffer, data_subtree, cmd_type_val)
+        if (9 + data_length) <= buffer:len() then
+            local data_buffer = buffer(9, data_length)
+            
+            -- 显示原始字节（不使用ProtoField.bytes）
+            local hex_str = ""
+            for i = 0, data_length-1 do
+                hex_str = hex_str .. string.format("%02X ", data_buffer(i,1):uint())
+            end
+            
+            -- 创建数据字段子树
+            local data_subtree = subtree:add("Data Field: " .. hex_str)
+            
+            -- 在子树内部使用ProtoField来解析结构
+            dissect_control_data(data_buffer, data_subtree, cmd_type_val)
+        else
+            subtree:add_expert_info(PI_MALFORMED, PI_WARN, "数据字段长度超出缓冲区范围")
+        end
     end
     
     -- 解析CRC32字段
