@@ -60,6 +60,8 @@
 | 56200 | 推送数据 | LivoxPushmsg |
 | 56300 | 点云数据 | LivoxData  |
 | 56400 | IMU 数据 | LivoxData  |
+| 56500 | LOG 数据 | LivoxCtrl  |
+
 
 ### HAP 相关端口
 | 端口  | 用途              | 协议类型                  |
