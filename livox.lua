@@ -6,7 +6,7 @@
 -- Version: 1.2.1
 -------------------------------------------------------------------------------
 -- History:
--- 2025-11-20: 增加对56500端口Log数据帧解析
+-- 2025-11-27: 为 LivoxData 数据帧时间戳字段添加日期字符串显示
 -- 2025-11-11: 优化老工规雷达控制指令字段显示
 -- 2025-05-26: 增加对应字段高亮显示功能
 -- beta modify：将core_temp改为float
@@ -1057,8 +1057,24 @@ function livox_data_proto.dissector(buffer, pinfo, tree)
     local crc32_val = buffer(24,4):le_uint()
     subtree:add(f_crc32, buffer(24,4), crc32_val, string.format("crc32 (CRC32校验): 0x%08X", crc32_val))
     local ts_val = buffer(28,8):le_uint64()
-    subtree:add(f_timestamp, buffer(28,8), ts_val, "timestamp (时间戳): " .. tostring(ts_val))
-
+    local time_str = tostring(ts_val)
+    local time_num = tonumber(time_str)
+    
+    -- 添加日期字符串显示
+    local date_str = "N/A"
+    if time_num and time_num > 0 then
+        -- 统一转换为秒
+        local seconds_total = time_num / 1000000000  -- 转换为秒
+        local seconds_int = math.floor(seconds_total)
+        local fractional = seconds_total - seconds_int
+        
+        -- 格式化为 YYYY-MM-DD HH:MM:SS.ffffff
+        date_str = os.date("%Y-%m-%d %H:%M:%S", seconds_int) .. string.format(".%06d", math.floor(fractional * 1000000))
+    end
+    
+    local timestamp_display = string.format("timestamp (时间戳): %s (%s)", tostring(ts_val), date_str)
+    subtree:add(f_timestamp, buffer(28,8), ts_val, timestamp_display)
+    
     -- data字段解析
     local data_offset = 36
     if buffer:len() > data_offset then
