@@ -21,8 +21,12 @@ local f_fov_en = ProtoField.string("livox.fov_en", "FOV使能", base.UNICODE)
 local f_detect_mode = ProtoField.string("livox.detect_mode", "探测模式", base.UNICODE)
 local f_func_io_cfg = ProtoField.string("livox.func_io_cfg", "功能线配置", base.UNICODE)
 local f_work_tgt_mode = ProtoField.string("livox.work_tgt_mode", "目标工作模式", base.UNICODE)
+local f_fov_mode = ProtoField.string("livox.fov_mode", "FOV模式", base.UNICODE)
+local f_echo_num = ProtoField.string("livox.echo_num", "回波模式", base.UNICODE)
+local f_NTP_server_ip = ProtoField.string("livox.NTP_server_ip", "NTP服务器IP", base.UNICODE)
 local f_imu_data_en = ProtoField.string("livox.imu_data_en", "IMU数据输出", base.UNICODE)
 local f_rpm_mode = ProtoField.string("livox.rpm_mode", "电机转速模式", base.UNICODE)
+local f_ppssync_mode = ProtoField.string("livox.ppssync_mode", "异常时间过滤", base.UNICODE)
 local f_sn = ProtoField.string("livox.sn", "SN号", base.UNICODE)
 local f_product_info = ProtoField.string("livox.product_info", "产品信息", base.UNICODE)
 local f_version_app = ProtoField.string("livox.version_app", "固件版本", base.UNICODE)
@@ -52,7 +56,7 @@ local f_cur_glass_heat_state = ProtoField.string("livox.cur_glass_heat_state", "
 livox_pushmsg_proto.fields = {
     f_pcl_type, f_pattern_mode, f_lidar_ip, f_target_push, f_target_pcl, f_target_imu, f_install_attitude,
     f_fov_cfg0, f_fov_cfg1, f_fov_en, f_detect_mode, f_func_io_cfg,
-    f_work_tgt_mode, f_imu_data_en, f_rpm_mode, f_sn, f_product_info, f_version_app, f_mac,
+    f_work_tgt_mode, f_fov_mode, f_echo_num, f_NTP_server_ip, f_imu_data_en, f_rpm_mode, f_ppssync_mode, f_sn, f_product_info, f_version_app, f_mac,
     f_hms_codes, f_core_temp, f_powerup_count, f_local_time, f_last_sync_time,
     f_time_offset, f_time_sync_type, f_fw_type, f_error_code,
     f_loader_version, f_hw_version, f_work_status,
@@ -74,6 +78,7 @@ local fault_id_dict = {
     ["0115"] = "设备运行环境温度超过承受极限，设备已停止工作;请检查环境温度，或排查散热措施",
     ["0116"] = "设备外部电压异常;请检查外部电压",
     ["0117"] = "设备参数异常;请尝试重启设备恢复",
+    ["0118"] = "设备内部器件损坏，无法正常工作，请联系维修人员",
     ["0201"] = "扫描模块低温加热中",
     ["0210"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
     ["0211"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
@@ -142,7 +147,7 @@ local ret_code_map = {
     [0x34] = "固件擦除中"
 }
 
--- key 含义和格式映射表（参考336-762行）
+-- key 含义和格式映射表
 local key_map = {
     [0x0000] = {name="点云坐标格式", fmt=function(b) local v=b(0,1):uint(); local t={[0x01]="直角坐标(32bits)",[0x02]="直角坐标(16bits)",[0x03]="球坐标"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x0001] = {name="扫描模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="非重复扫描",[0x01]="重复扫描",[0x02]="低帧率重复扫描模式"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
@@ -158,8 +163,12 @@ local key_map = {
     [0x0018] = {name="探测模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="正常探测模式",[0x01]="敏感探测模式"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x0019] = {name="功能线配置", fmt=function(b) local s='' for i=0,b:len()-1 do s=s..tostring(b(i,1):uint()) if i<b:len()-1 then s=s..'.' end end return s end},
     [0x001A] = {name="目标工作模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x01]="采样",[0x02]="待机",[0x04]="错误",[0x05]="自检",[0x06]="电机启动",[0x08]="升级",[0x09]="就绪"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0022] = {name="FOV模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="Focus Detection Mode(小FOV)",[0x01]="Normal Detection Mode(大FOV)"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0024] = {name="回波模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="最强回波",[0x01]="第一回波"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0025] = {name="NTP服务器IP", fmt=function(b) return string.format("IP: %d.%d.%d.%d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint(),b(3,1):uint()) end, len=4},
     [0x001C] = {name="IMU数据输出", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="关闭",[0x01]="开启"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x0021] = {name="电机转速模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="默认转速",[0x01]="低转速"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0026] = {name="异常时间过滤", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="无异常时间过滤(时间戳正常同步，如果时间回退会导致点云中断)",[0x01]="有异常时间过滤(增加异常时间过滤,时间回退不会导致点云中断)"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x8000] = {name="SN号", fmt=function(b) return b:stringz() end},
     [0x8001] = {name="产品信息", fmt=function(b) return b:stringz() end},
     [0x8002] = {name="固件版本", fmt=function(b) if b:len()>=4 then return string.format("%d.%d.%04d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint()*100+b(3,1):uint()) else return "" end end, len=4},
@@ -199,6 +208,7 @@ local key_map = {
                 ["0115"] = "设备运行环境温度超过承受极限，设备已停止工作;请检查环境温度，或排查散热措施",
                 ["0116"] = "设备外部电压异常;请检查外部电压",
                 ["0117"] = "设备参数异常;请尝试重启设备恢复",
+                ["0118"] = "设备内部器件损坏，无法正常工作，请联系维修人员",
                 ["0201"] = "扫描模块低温加热中",
                 ["0210"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
                 ["0211"] = "扫描模块异常，请尝试：1.检查供电是否正常 2.重启设备 3.更新最新固件",
@@ -620,6 +630,23 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
             }
             local val = work_tgt_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
             subtree:add(f_work_tgt_mode, data_bytes(0,1), val) 
+        
+        elseif key == 0x0022 then
+            -- FOV模式
+            local fov_mode_map = {[0x00]="Focus Detection Mode(小FOV)",[0x01]="Normal Detection Mode(大FOV)"}
+            local val = fov_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_fov_mode, data_bytes(0,1), val) 
+
+        elseif key == 0x0024 then
+            -- 回波模式
+            local echo_num_map = {[0x00]="最强回波",[0x01]="第一回波"}
+            local val = echo_num_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_echo_num, data_bytes(0,1), val) 
+
+        elseif key == 0x0025 then
+            -- NTP服务器IP
+            local ntp_server_ip = string.format("%d.%d.%d.%d", data_bytes(0,1):uint(), data_bytes(1,1):uint(), data_bytes(2,1):uint(), data_bytes(3,1):uint())
+            subtree:add(f_NTP_server_ip, data_bytes(0,4), ntp_server_ip) 
 
         elseif key == 0x001C then
             -- IMU数据输出使能
@@ -628,10 +655,16 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
             subtree:add(f_imu_data_en, data_bytes(0,1), val) 
 
         elseif key == 0x0021 then
-            -- 电机转速模式（0x00:默认转速，0x01:低转速）
+            -- 电机转速模式
             local rpm_mode_map = {[0x00]="默认转速", [0x01]="低转速"}
             local val = rpm_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
             subtree:add(f_rpm_mode, data_bytes(0,1), val) 
+
+        elseif key == 0x0026 then
+            -- 异常时间过滤
+            local ppssync_mode_map = {[0x00]="无异常时间过滤(时间戳正常同步，如果时间回退会导致点云中断)", [0x01]="有异常时间过滤(增加异常时间过滤,时间回退不会导致点云中断)"}
+            local val = ppssync_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_ppssync_mode, data_bytes(0,1), val) 
 
         elseif key == 0x8000 then
             -- SN号
@@ -978,7 +1011,8 @@ local livox_data_type_map = {
     [0] = "IMU数据",
     [1] = "直角坐标32bit点云",
     [2] = "直角坐标16bit点云", 
-    [3] = "球坐标点云"
+    [3] = "球坐标点云",
+    [17] = "双回波直角坐标点云"
 }
 
 -- Livox Data协议的时间戳类型映射表
@@ -986,6 +1020,7 @@ local livox_time_type_map = {
     [0] = "无同步源，时间戳为雷达自上电以来经过的时间",
     [1] = "gPTP/PTP同步，时间戳为master时钟源时间",
     [2] = "GPS时间同步",
+    [5] = "NTP时间同步"
 }
 
 local livox_data_proto = Proto("LivoxData", "Livox Data")
@@ -1577,7 +1612,7 @@ if data_length > 2 then
                     end
                     
                     local feature_msg_val = buffer(4,1):uint()
-                    local rain_fog_status = (feature_msg_val & 0x01) > 0 and "开启" or "关闭"
+                    local rain_fog_status = bit.band(feature_msg_val, 0x01) > 0 and "开启" or "关闭"
                     
                     if f_feature_msg then
                         cmd_data_subtree:add(f_feature_msg, buffer(4,1), feature_msg_val, string.format("Feature Message: 0x%02X (抗雨雾: %s)", feature_msg_val, rain_fog_status))
@@ -1608,7 +1643,7 @@ if data_length > 2 then
                         local status_details = {}
                         
                         -- 温度状态 (Bit0-1)
-                        local temp_status = (ack_msg_val >> 0) & 0x3
+                        local temp_status = bit.band(bit.rshift(ack_msg_val, 0), 0x3)
                         if temp_status == 0 then
                             table.insert(status_details, "温度正常")
                         elseif temp_status == 1 then
@@ -1618,7 +1653,7 @@ if data_length > 2 then
                         end
                         
                         -- 电压状态 (Bit2-3)
-                        local volt_status = (ack_msg_val >> 2) & 0x3
+                        local volt_status = bit.band(bit.rshift(ack_msg_val, 2), 0x3)
                         if volt_status == 0 then
                             table.insert(status_details, "电压正常")
                         elseif volt_status == 1 then
@@ -1628,7 +1663,7 @@ if data_length > 2 then
                         end
                         
                         -- 电机状态 (Bit4-5)
-                        local motor_status = (ack_msg_val >> 4) & 0x3
+                        local motor_status = bit.band(bit.rshift(ack_msg_val, 4), 0x3)
                         if motor_status == 0 then
                             table.insert(status_details, "电机正常")
                         elseif motor_status == 1 then
@@ -1638,7 +1673,7 @@ if data_length > 2 then
                         end
                         
                         -- 脏污警告 (Bit6-7)
-                        local dirty_warn = (ack_msg_val >> 6) & 0x3
+                        local dirty_warn = bit.band(bit.rshift(ack_msg_val, 6), 0x3)
                         if dirty_warn == 0 then
                             table.insert(status_details, "无脏污和遮挡")
                         elseif dirty_warn >= 1 then
@@ -1646,7 +1681,7 @@ if data_length > 2 then
                         end
                         
                         -- 固件状态 (Bit8)
-                        local firmware_status = (ack_msg_val >> 8) & 0x1
+                        local firmware_status = bit.band(bit.rshift(ack_msg_val, 8), 0x1)
                         if firmware_status == 0 then
                             table.insert(status_details, "固件正常")
                         else
@@ -1654,7 +1689,7 @@ if data_length > 2 then
                         end
                         
                         -- PPS状态 (Bit9)
-                        local pps_status = (ack_msg_val >> 9) & 0x1
+                        local pps_status = bit.band(bit.rshift(ack_msg_val, 9), 0x1)
                         if pps_status == 0 then
                             table.insert(status_details, "无PPS信号")
                         else
@@ -1662,7 +1697,7 @@ if data_length > 2 then
                         end
                         
                         -- 设备状态 (Bit10)
-                        local device_status = (ack_msg_val >> 10) & 0x1
+                        local device_status = bit.band(bit.rshift(ack_msg_val, 10), 0x1)
                         if device_status == 0 then
                             table.insert(status_details, "设备正常")
                         else
@@ -1670,7 +1705,7 @@ if data_length > 2 then
                         end
                         
                         -- 风扇状态 (Bit11)
-                        local fan_status = (ack_msg_val >> 11) & 0x1
+                        local fan_status = bit.band(bit.rshift(ack_msg_val, 11), 0x1)
                         if fan_status == 0 then
                             table.insert(status_details, "风扇正常")
                         else
@@ -1678,7 +1713,7 @@ if data_length > 2 then
                         end
                         
                         -- 自加热状态 (Bit12)
-                        local self_heating = (ack_msg_val >> 12) & 0x1
+                        local self_heating = bit.band(bit.rshift(ack_msg_val, 12), 0x1)
                         if self_heating == 0 then
                             table.insert(status_details, "低温自加热关闭")
                         else
@@ -1686,7 +1721,7 @@ if data_length > 2 then
                         end
                         
                         -- PTP状态 (Bit13)
-                        local ptp_status = (ack_msg_val >> 13) & 0x1
+                        local ptp_status = bit.band(bit.rshift(ack_msg_val, 13), 0x1)
                         if ptp_status == 0 then
                             table.insert(status_details, "无1588信号")
                         else
@@ -1694,7 +1729,7 @@ if data_length > 2 then
                         end
                         
                         -- 时间同步状态 (Bit14-16)
-                        local time_sync_status = (ack_msg_val >> 14) & 0x7
+                        local time_sync_status = bit.band(bit.rshift(ack_msg_val, 14), 0x7)
                         if time_sync_status == 0 then
                             table.insert(status_details, "未开始时间同步")
                         elseif time_sync_status == 1 then
@@ -1708,7 +1743,7 @@ if data_length > 2 then
                         end
                         
                         -- 系统状态 (Bit30-31)
-                        local system_status = (ack_msg_val >> 30) & 0x3
+                        local system_status = bit.band(bit.rshift(ack_msg_val, 30), 0x3)
                         if system_status == 0 then
                             table.insert(status_details, "系统正常")
                         elseif system_status == 1 then
@@ -1801,7 +1836,7 @@ if data_length > 2 then
                 local status_details = {}
                 
                 -- 温度状态 (Bit0-1)
-                local temp_status = (status_code_val >> 0) & 0x3
+                local temp_status = bit.band(bit.rshift(status_code_val, 0), 0x3)
                 if temp_status == 0 then
                     table.insert(status_details, "温度正常")
                 elseif temp_status == 1 then
@@ -1811,7 +1846,7 @@ if data_length > 2 then
                 end
                 
                 -- 电压状态 (Bit2-3)
-                local volt_status = (status_code_val >> 2) & 0x3
+                local volt_status = bit.band(bit.rshift(status_code_val, 2), 0x3)
                 if volt_status == 0 then
                     table.insert(status_details, "电压正常")
                 elseif volt_status == 1 then
@@ -1821,7 +1856,7 @@ if data_length > 2 then
                 end
                 
                 -- 电机状态 (Bit4-5)
-                local motor_status = (status_code_val >> 4) & 0x3
+                local motor_status = bit.band(bit.rshift(status_code_val, 4), 0x3)
                 if motor_status == 0 then
                     table.insert(status_details, "电机正常")
                 elseif motor_status == 1 then
@@ -1831,7 +1866,7 @@ if data_length > 2 then
                 end
                 
                 -- 脏污警告 (Bit6-7)
-                local dirty_warn = (status_code_val >> 6) & 0x3
+                local dirty_warn = bit.band(bit.rshift(status_code_val, 6), 0x3)
                 if dirty_warn == 0 then
                     table.insert(status_details, "无脏污和遮挡")
                 elseif dirty_warn >= 1 then
@@ -1839,7 +1874,7 @@ if data_length > 2 then
                 end
                 
                 -- 固件状态 (Bit8)
-                local firmware_status = (status_code_val >> 8) & 0x1
+                local firmware_status = bit.band(bit.rshift(status_code_val, 8), 0x1)
                 if firmware_status == 0 then
                     table.insert(status_details, "固件正常")
                 else
@@ -1847,7 +1882,7 @@ if data_length > 2 then
                 end
                 
                 -- PPS状态 (Bit9)
-                local pps_status = (status_code_val >> 9) & 0x1
+                local pps_status = bit.band(bit.rshift(status_code_val, 9), 0x1)
                 if pps_status == 0 then
                     table.insert(status_details, "无PPS信号")
                 else
@@ -1855,7 +1890,7 @@ if data_length > 2 then
                 end
                 
                 -- 设备状态 (Bit10)
-                local device_status = (status_code_val >> 10) & 0x1
+                local device_status = bit.band(bit.rshift(status_code_val, 10), 0x1)
                 if device_status == 0 then
                     table.insert(status_details, "设备正常")
                 else
@@ -1863,7 +1898,7 @@ if data_length > 2 then
                 end
                 
                 -- 风扇状态 (Bit11)
-                local fan_status = (status_code_val >> 11) & 0x1
+                local fan_status = bit.band(bit.rshift(status_code_val, 11), 0x1)
                 if fan_status == 0 then
                     table.insert(status_details, "风扇正常")
                 else
@@ -1871,7 +1906,7 @@ if data_length > 2 then
                 end
                 
                 -- 自加热状态 (Bit12)
-                local self_heating = (status_code_val >> 12) & 0x1
+                local self_heating = bit.band(bit.rshift(status_code_val, 12), 0x1)
                 if self_heating == 0 then
                     table.insert(status_details, "低温自加热关闭")
                 else
@@ -1879,7 +1914,7 @@ if data_length > 2 then
                 end
                 
                 -- PTP状态 (Bit13)
-                local ptp_status = (status_code_val >> 13) & 0x1
+                local ptp_status = bit.band(bit.rshift(status_code_val, 13), 0x1)
                 if ptp_status == 0 then
                     table.insert(status_details, "无1588信号")
                 else
@@ -1887,7 +1922,7 @@ if data_length > 2 then
                 end
                 
                 -- 时间同步状态 (Bit14-16)
-                local time_sync_status = (status_code_val >> 14) & 0x7
+                local time_sync_status = bit.band(bit.rshift(status_code_val, 14), 0x7)
                 if time_sync_status == 0 then
                     table.insert(status_details, "未开始时间同步")
                 elseif time_sync_status == 1 then
@@ -1901,7 +1936,7 @@ if data_length > 2 then
                 end
                 
                 -- 系统状态 (Bit30-31)
-                local system_status = (status_code_val >> 30) & 0x3
+                local system_status = bit.band(bit.rshift(status_code_val, 30), 0x3)
                 if system_status == 0 then
                     table.insert(status_details, "系统正常")
                 elseif system_status == 1 then
