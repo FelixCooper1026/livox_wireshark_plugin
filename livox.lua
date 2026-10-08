@@ -3,7 +3,7 @@
 -- Description: Wireshark Lua Plugin for Livox Mid-360 Pushmsg Diagnostic
 -- Author: FelixCooper1026
 -- Date: 2025-05-26
--- Version: 1.2.1
+-- Version: 1.2.3
 -------------------------------------------------------------------------------
 
 local livox_pushmsg_proto = Proto("LivoxPushmsg", "Livox Pushmsg Diag")
@@ -27,6 +27,8 @@ local f_NTP_server_ip = ProtoField.string("livox.NTP_server_ip", "NTP服务器IP
 local f_imu_data_en = ProtoField.string("livox.imu_data_en", "IMU数据输出", base.UNICODE)
 local f_rpm_mode = ProtoField.string("livox.rpm_mode", "电机转速模式", base.UNICODE)
 local f_ppssync_mode = ProtoField.string("livox.ppssync_mode", "异常时间过滤", base.UNICODE)
+local f_pc_freq_mode = ProtoField.string("livox.pc_freq_mode", "点频模式", base.UNICODE)
+local f_imu_sensor_cfg = ProtoField.string("livox.imu_sensor_cfg", "IMU量程配置", base.UNICODE)
 local f_sn = ProtoField.string("livox.sn", "SN号", base.UNICODE)
 local f_product_info = ProtoField.string("livox.product_info", "产品信息", base.UNICODE)
 local f_version_app = ProtoField.string("livox.version_app", "固件版本", base.UNICODE)
@@ -56,7 +58,7 @@ local f_cur_glass_heat_state = ProtoField.string("livox.cur_glass_heat_state", "
 livox_pushmsg_proto.fields = {
     f_pcl_type, f_pattern_mode, f_lidar_ip, f_target_push, f_target_pcl, f_target_imu, f_install_attitude,
     f_fov_cfg0, f_fov_cfg1, f_fov_en, f_detect_mode, f_func_io_cfg,
-    f_work_tgt_mode, f_fov_mode, f_echo_num, f_NTP_server_ip, f_imu_data_en, f_rpm_mode, f_ppssync_mode, f_sn, f_product_info, f_version_app, f_mac,
+    f_work_tgt_mode, f_fov_mode, f_echo_num, f_NTP_server_ip, f_imu_data_en, f_rpm_mode, f_ppssync_mode, f_pc_freq_mode, f_imu_sensor_cfg, f_sn, f_product_info, f_version_app, f_mac,
     f_hms_codes, f_core_temp, f_powerup_count, f_local_time, f_last_sync_time,
     f_time_offset, f_time_sync_type, f_fw_type, f_error_code,
     f_loader_version, f_hw_version, f_work_status,
@@ -167,8 +169,10 @@ local key_map = {
     [0x0024] = {name="回波模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="最强回波",[0x01]="第一回波"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x0025] = {name="NTP服务器IP", fmt=function(b) return string.format("IP: %d.%d.%d.%d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint(),b(3,1):uint()) end, len=4},
     [0x001C] = {name="IMU数据输出", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="关闭",[0x01]="开启"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
-    [0x0021] = {name="电机转速模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="默认转速",[0x01]="低转速"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0021] = {name="电机转速模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="正常转速",[0x01]="低转速（仅Mid360S支持）",[0x02]="高转速（仅Mid360L支持）"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
     [0x0026] = {name="异常时间过滤", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="无异常时间过滤(时间戳正常同步，如果时间回退会导致点云中断)",[0x01]="有异常时间过滤(增加异常时间过滤,时间回退不会导致点云中断)"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x0029] = {name="点频模式", fmt=function(b) local v=b(0,1):uint(); local t={[0x00]="80k",[0x01]="50k",[0x02]="100k"}; return t[v] or string.format("未知格式(0x%02X)",v) end, len=1},
+    [0x002B] = {name="IMU量程配置", fmt=function(b) local output_rate={[0x00]="200Hz",[0x01]="500Hz",[0x02]="100Hz",[0x03]="50Hz"}; local accel_range={[0x00]="±4g",[0x01]="±8g",[0x02]="±16g",[0x03]="±32g"}; local gyro_range={[0x00]="±2000dps",[0x01]="±1000dps",[0x02]="±500dps",[0x03]="±250dps",[0x04]="±125dps",[0x05]="±62.5dps",[0x06]="±31.25dps",[0x07]="±15.625dps"}; return string.format("输出频率：%s，加速度量程：%s，陀螺仪量程：%s", output_rate[b(0,1):uint()] or "未知", accel_range[b(1,1):uint()] or "未知", gyro_range[b(2,1):uint()] or "未知") end, len=3},
     [0x8000] = {name="SN号", fmt=function(b) return b:stringz() end},
     [0x8001] = {name="产品信息", fmt=function(b) return b:stringz() end},
     [0x8002] = {name="固件版本", fmt=function(b) if b:len()>=4 then return string.format("%d.%d.%04d",b(0,1):uint(),b(1,1):uint(),b(2,1):uint()*100+b(3,1):uint()) else return "" end end, len=4},
@@ -656,7 +660,11 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
 
         elseif key == 0x0021 then
             -- 电机转速模式
-            local rpm_mode_map = {[0x00]="默认转速", [0x01]="低转速"}
+            local rpm_mode_map = {
+                [0x00] = "正常转速",
+                [0x01] = "低转速（仅Mid360S支持）",
+                [0x02] = "高转速（仅Mid360L支持）"
+            }
             local val = rpm_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
             subtree:add(f_rpm_mode, data_bytes(0,1), val) 
 
@@ -665,6 +673,25 @@ function livox_pushmsg_proto.dissector(buffer, pinfo, tree)
             local ppssync_mode_map = {[0x00]="无异常时间过滤(时间戳正常同步，如果时间回退会导致点云中断)", [0x01]="有异常时间过滤(增加异常时间过滤,时间回退不会导致点云中断)"}
             local val = ppssync_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
             subtree:add(f_ppssync_mode, data_bytes(0,1), val) 
+
+        elseif key == 0x0029 then
+            -- 点频模式
+            local pc_freq_mode_map = {[0x00]="80k", [0x01]="50k", [0x02]="100k"}
+            local val = pc_freq_mode_map[data_bytes(0,1):uint()] or string.format("未知格式(0x%02X)", data_bytes(0,1):uint())
+            subtree:add(f_pc_freq_mode, data_bytes(0,1), val)
+
+        elseif key == 0x002B then
+            -- IMU量程配置
+            local output_rate_map = {[0x00]="200Hz", [0x01]="500Hz", [0x02]="100Hz", [0x03]="50Hz"}
+            local accel_range_map = {[0x00]="±4g", [0x01]="±8g", [0x02]="±16g", [0x03]="±32g"}
+            local gyro_range_map = {[0x00]="±2000dps", [0x01]="±1000dps", [0x02]="±500dps", [0x03]="±250dps", [0x04]="±125dps", [0x05]="±62.5dps", [0x06]="±31.25dps", [0x07]="±15.625dps"}
+            local val = string.format(
+                "输出频率：%s，加速度量程：%s，陀螺仪量程：%s",
+                output_rate_map[data_bytes(0,1):uint()] or "未知",
+                accel_range_map[data_bytes(1,1):uint()] or "未知",
+                gyro_range_map[data_bytes(2,1):uint()] or "未知"
+            )
+            subtree:add(f_imu_sensor_cfg, data_bytes(0,3), val)
 
         elseif key == 0x8000 then
             -- SN号
